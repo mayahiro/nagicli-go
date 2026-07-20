@@ -2,11 +2,11 @@
 
 [日本語](README_ja.md)
 
-Nagi CLI for Go is a native command-application framework built around a
-validated command graph, typed values, injected process services, structured
-diagnostics, and explicit exit status
+Nagi CLI for Go provides a native command-application framework with a
+validated Command Graph, typed values, injected process services, structured
+Diagnostics, and explicit Exit Status
 
-It uses Nagi Text for terminal-cell-aware help alignment and does not depend on
+It uses Nagi Text for terminal-Cell-aware help alignment and does not depend on
 Nagi Surface or Nagi TUI
 
 ## Requirements
@@ -14,7 +14,7 @@ Nagi Surface or Nagi TUI
 - Go 1.25 or newer
 - Linux or macOS on x86-64 or ARM64 for process integration
 
-## Installation after the v0.2.0 release
+## Installation
 
 ```sh
 go get github.com/mayahiro/nagicli-go@v0.2.0
@@ -22,93 +22,48 @@ go get github.com/mayahiro/nagicli-go@v0.2.0
 
 ## Quick start
 
-```go
-package main
+Run the [basic command example](examples/basic/README.md):
 
-import (
-	"fmt"
-	"os"
-
-	cli "github.com/mayahiro/nagicli-go"
-)
-
-func main() {
-	command := cli.NewCommand("greet").
-		About("Print a greeting").
-		Argument(cli.Positional("name").Parser(cli.StringParser()).Required()).
-		Handle(func(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, error) {
-			name, _ := cli.ValueAs[string](invocation, "name")
-			if _, err := fmt.Fprintf(context.Stdout(), "Hello, %s!\n", name); err != nil {
-				return cli.Outcome{}, cli.NewDiagnostic(cli.CodeIOError, err.Error())
-			}
-			return cli.Success(), nil
-		})
-
-	status, err := command.RunProcess()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(int(cli.StatusFailure))
-	}
-	os.Exit(int(status))
-}
+```sh
+go run ./examples/basic Nagi
 ```
-
-Public parsing methods accept arguments after the program name. `RunProcess`
-reads `os.Args[1:]`, injects standard I/O, environment and current directory,
-converts SIGINT into cooperative cancellation, and returns instead of calling
-`os.Exit`
 
 ## Capabilities
 
 - Long, short, clustered, repeated, required, defaulted, and environment-backed options
 - Positional arguments, nested subcommands, aliases, and `--` termination
 - Raw byte strings, UTF-8 strings, signed 64-bit integers, finite values, and custom typed parsers
-- Deterministic help, stable diagnostic codes, and statuses 0, 1, 2, and 130
+- Deterministic help, stable Diagnostic codes, and statuses 0, 1, 2, and 130
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
-- Process-free application tests through `github.com/mayahiro/nagicli-go/clitest`
+- Process-free application tests through package `clitest`
 
-See the shared [CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)
-and [public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API.md)
-for the complete contract
+The shared [CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)
+define the observable contract and Rust parity
 
 ## Testing applications
 
-`clitest` injects process inputs and captures status and output without starting
-a process or installing signal handlers
+Package `clitest` injects process inputs and captures status and output without
+starting a process or installing signal handlers. The basic example includes an
+[executable application test](examples/basic/main_test.go)
 
-```go
-result, err := clitest.New(command).
-	Arguments("Nagi").
-	Environment("LANG", "C").
-	CurrentDirectory("/work").
-	Run()
+```sh
+go test ./examples/basic
 ```
 
 ## Examples
 
-```sh
-go run ./examples/basic Nagi
-go run ./examples/subcommands start -vv
-```
+| Example | Command |
+| --- | --- |
+| [Basic command](examples/basic/README.md) | `go run ./examples/basic Nagi` |
+| [Nested subcommands](examples/subcommands/README.md) | `go run ./examples/subcommands start -vv` |
 
-Both examples are built by `make build`
-
-## Development
-
-From the family superproject checkout, run the complete shared-fixture suite
-
-```sh
-NAGI_FIXTURES=../fixtures GOWORK=../go.work make check
-```
-
-Without `NAGI_FIXTURES`, the conformance tests are skipped while package tests,
-examples, formatting, and vet checks still run
+Both examples are included in `go build ./...`
 
 ## Limitations
 
-The v0.2.0 core does not provide shell completion, configuration-file loading,
-interactive prompts, or TUI integration. Handlers are responsible for polling
-the injected cancellation context during long-running work
+Shell completion, configuration-file loading, interactive prompts, and TUI
+integration are not provided. Long-running handlers must poll the injected
+cancellation context cooperatively
 
 ## License
 
