@@ -6,6 +6,21 @@ import (
 	nagitext "github.com/mayahiro/nagi-go/text"
 )
 
+type usageVariant struct {
+	id     string
+	syntax string
+}
+
+// HelpUsageVariant is one structured invocation syntax in a Help Document
+type HelpUsageVariant struct {
+	// ID is the stable variant identifier
+	ID string
+	// Syntax is the command-path-relative syntax suffix
+	Syntax string
+	// CommandLine is the complete canonical usage line
+	CommandLine string
+}
+
 // HelpEntry is one labeled description in a Help Document
 type HelpEntry struct {
 	// ID is the stable command, argument, option, or generated entry identifier
@@ -136,6 +151,7 @@ type HelpDocument struct {
 	commandPath     []string
 	description     string
 	usage           []string
+	usageVariants   []HelpUsageVariant
 	commands        []HelpEntry
 	arguments       []HelpEntry
 	options         []HelpEntry
@@ -155,8 +171,13 @@ func (d HelpDocument) CommandPath() []string {
 // Description returns the command description
 func (d HelpDocument) Description() string { return d.description }
 
-// Usage returns a copy of generated usage lines
+// Usage returns a copy of rendered usage lines
 func (d HelpDocument) Usage() []string { return append([]string(nil), d.usage...) }
+
+// UsageVariants returns a copy of structured usage metadata
+func (d HelpDocument) UsageVariants() []HelpUsageVariant {
+	return append([]HelpUsageVariant(nil), d.usageVariants...)
+}
 
 // Commands returns a copy of child-command entries
 func (d HelpDocument) Commands() []HelpEntry {
@@ -312,16 +333,22 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 		)
 	}
 
+	usageVariants := helpUsageVariants(command, path)
+	usage := make([]string, 0, len(usageVariants))
+	for _, variant := range usageVariants {
+		usage = append(usage, variant.CommandLine)
+	}
 	document := HelpDocument{
 		commandPath: append([]string(nil), path...),
 		description: command.about,
-		usage:       []string{usageLine(command, path)},
-		examples:    append([]HelpExample(nil), command.examples...),
-		notes:       append([]string(nil), command.notes...),
-		links:       append([]HelpLink(nil), command.links...),
-	}
-	if len(command.subcommands) > 0 && !command.subcommandRequired {
-		document.usage = append(document.usage, strings.Join(path, " ")+" [OPTIONS] <COMMAND>")
+		usage:       usage,
+		usageVariants: append(
+			[]HelpUsageVariant(nil),
+			usageVariants...,
+		),
+		examples: append([]HelpExample(nil), command.examples...),
+		notes:    append([]string(nil), command.notes...),
+		links:    append([]HelpLink(nil), command.links...),
 	}
 	for _, child := range command.subcommands {
 		document.commands = append(document.commands, HelpEntry{
@@ -400,6 +427,38 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 		document.sections = append(document.sections, cloneHelpSection(section))
 	}
 	return document, nil
+}
+
+func helpUsageVariants(command *Command, path []string) []HelpUsageVariant {
+	var variants []HelpUsageVariant
+	if len(command.usageVariants) == 0 {
+		variants = append(variants, newHelpUsageVariant(
+			"default",
+			generatedUsageSyntax(command),
+			path,
+		))
+	} else {
+		variants = make([]HelpUsageVariant, 0, len(command.usageVariants)+1)
+		for _, variant := range command.usageVariants {
+			variants = append(variants, newHelpUsageVariant(variant.id, variant.syntax, path))
+		}
+	}
+	if len(command.subcommands) > 0 && !command.subcommandRequired {
+		variants = append(variants, newHelpUsageVariant(
+			"subcommand",
+			"[OPTIONS] <COMMAND>",
+			path,
+		))
+	}
+	return variants
+}
+
+func newHelpUsageVariant(id, syntax string, path []string) HelpUsageVariant {
+	return HelpUsageVariant{
+		ID:          id,
+		Syntax:      syntax,
+		CommandLine: usageCommandLine(path, syntax),
+	}
 }
 
 // RenderHelp renders standard Help for a canonical command path

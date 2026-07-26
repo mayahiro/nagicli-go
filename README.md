@@ -17,7 +17,7 @@ Nagi Surface or Nagi TUI
 ## Installation
 
 ```sh
-go get github.com/mayahiro/nagicli-go@v0.2.0
+go get github.com/mayahiro/nagicli-go@v0.3.1
 ```
 
 ## Quick start
@@ -34,7 +34,7 @@ go run ./examples/basic Nagi
 - Positional arguments, nested subcommands, aliases, and `--` termination
 - Raw byte strings, UTF-8 strings, signed 64-bit integers, finite values, and custom typed parsers
 - Source-aware option relations, four portable option-group rules, and typed Invocation validators
-- Structured deterministic Help, custom sections and renderers, and `help [COMMAND...]`
+- Structured deterministic Help, stable Usage Variants, custom sections and renderers, and `help [COMMAND...]`
 - Stable Diagnostic codes and categories with configurable rendering and exit-code mapping
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
 - Process-free application tests through package `clitest`
@@ -66,7 +66,8 @@ Both examples are included in `go build ./...`
 Shell completion, configuration-file loading, interactive prompts, and TUI
 integration are not provided. Long-running handlers must poll the injected
 cancellation context cooperatively. The portable graph does not model
-arbitrary invocation grammars
+arbitrary invocation grammars. Help-only Usage Variants can document
+validator-backed forms without changing parser semantics
 
 ## License
 

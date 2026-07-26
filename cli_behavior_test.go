@@ -69,6 +69,20 @@ func TestGraphValidationRejectsPathAndSiblingCollisions(t *testing.T) {
 		"duplicate group member": cli.NewCommand("root").
 			Option(cli.Flag("known").Long("known")).
 			OptionGroup(cli.AtMostOne("source", "known", "known")),
+		"duplicate usage variant": cli.NewCommand("root").
+			UsageVariant("node", "<NODE>").
+			UsageVariant("node", "<X> <Y>"),
+		"invalid usage syntax": cli.NewCommand("root").
+			UsageVariant("node", "<NODE>\n"),
+		"invalid UTF-8 usage syntax": cli.NewCommand("root").
+			UsageVariant("node", string([]byte{0xff})),
+		"usage variant on required subcommand": cli.NewCommand("root").
+			RequireSubcommand().
+			UsageVariant("node", "<NODE>").
+			Subcommand(cli.NewCommand("child")),
+		"generated usage ID collision": cli.NewCommand("root").
+			UsageVariant("subcommand", "<NODE>").
+			Subcommand(cli.NewCommand("child")),
 	}
 	for name, command := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -163,21 +177,33 @@ func TestOptionGroupKinds(t *testing.T) {
 
 func TestHelpDocumentExposesStructuredAdditions(t *testing.T) {
 	command := cli.NewCommand("root").
+		UsageVariant("node", "<NODE> [OPTIONS]").
+		UsageVariant("coordinates", "<X> <Y> [OPTIONS]").
 		Option(cli.Flag("a").Long("a").Conflicts("b")).
 		Option(cli.Flag("b").Long("b")).
 		OptionGroup(cli.AtMostOne("selection", "a", "b")).
 		Example("basic", "root --a").
 		Note("Choose one source").
 		Link("guide", "https://example.com/guide").
-		HelpSection(cli.NewHelpSection("details", "Details").Paragraph("Additional text"))
+		HelpSection(cli.NewHelpSection("details", "Details").Paragraph("Additional text")).
+		Subcommand(cli.NewCommand("child"))
 	document, err := command.HelpDocument([]string{"root"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(document.Examples()) != 1 || len(document.Notes()) != 1 ||
 		len(document.Links()) != 1 || len(document.Sections()) != 1 ||
-		len(document.OptionRelations()) != 1 || len(document.OptionGroups()) != 1 {
+		len(document.OptionRelations()) != 1 || len(document.OptionGroups()) != 1 ||
+		len(document.UsageVariants()) != 3 {
 		t.Fatalf("incomplete Help Document: %+v", document)
+	}
+	usages := document.UsageVariants()
+	if usages[0].ID != "node" || usages[0].Syntax != "<NODE> [OPTIONS]" ||
+		usages[0].CommandLine != "root <NODE> [OPTIONS]" ||
+		document.Usage()[1] != "root <X> <Y> [OPTIONS]" ||
+		usages[2].ID != "subcommand" ||
+		usages[2].CommandLine != "root [OPTIONS] <COMMAND>" {
+		t.Fatalf("Help usage metadata = %+v, lines = %v", usages, document.Usage())
 	}
 	options := document.Options()
 	groups := document.OptionGroups()
@@ -189,6 +215,36 @@ func TestHelpDocumentExposesStructuredAdditions(t *testing.T) {
 	if relations[0].SourceID != "a" || relations[0].TargetID != "b" ||
 		relations[0].Kind != cli.HelpRelationConflicts {
 		t.Fatalf("Help relation metadata = %+v", relations)
+	}
+}
+
+func TestUsageVariantsRemainHelpOnly(t *testing.T) {
+	generated, err := cli.NewCommand("root").HelpDocument([]string{"root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if variants := generated.UsageVariants(); len(variants) != 1 ||
+		variants[0].ID != "default" || variants[0].Syntax != "[OPTIONS]" {
+		t.Fatalf("generated Help usage metadata = %+v", variants)
+	}
+
+	command := cli.NewCommand("root").
+		UsageVariant("node", "<NODE>").
+		Argument(cli.Positional("value").Required())
+	document, err := command.HelpDocument([]string{"root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := document.Usage()[0]; got != "root <NODE>" {
+		t.Fatalf("Help usage = %q", got)
+	}
+	_, err = command.Parse(nil)
+	var diagnostic *cli.Diagnostic
+	if !errors.As(err, &diagnostic) {
+		t.Fatalf("parse error = %v, want Diagnostic", err)
+	}
+	if got := diagnostic.Usage(); got != "root [OPTIONS] <VALUE>" {
+		t.Fatalf("Diagnostic usage = %q", got)
 	}
 }
 

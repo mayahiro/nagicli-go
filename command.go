@@ -246,6 +246,7 @@ type Command struct {
 	optionGroups       []OptionGroup
 	subcommands        []*Command
 	subcommandRequired bool
+	usageVariants      []usageVariant
 	examples           []HelpExample
 	notes              []string
 	links              []HelpLink
@@ -306,6 +307,16 @@ func (c *Command) Subcommand(command *Command) *Command {
 // RequireSubcommand requires one child command to be selected
 func (c *Command) RequireSubcommand() *Command {
 	c.subcommandRequired = true
+	return c
+}
+
+// UsageVariant appends one Help-only invocation syntax with a stable ID
+//
+// The syntax is a non-empty suffix relative to the canonical command path
+// and does not change argv parsing, Invocation validation, Diagnostic usage,
+// or Invocation values
+func (c *Command) UsageVariant(id, syntax string) *Command {
+	c.usageVariants = append(c.usageVariants, usageVariant{id: id, syntax: syntax})
 	return c
 }
 
@@ -524,14 +535,22 @@ func (c *Command) optionByID(id string) *OptionSpec {
 }
 
 func usageLine(command *Command, path []string) string {
-	usage := strings.Join(path, " ") + " [OPTIONS]"
+	return usageCommandLine(path, generatedUsageSyntax(command))
+}
+
+func generatedUsageSyntax(command *Command) string {
+	syntax := "[OPTIONS]"
 	for i := range command.arguments {
-		usage += " " + argumentLabel(&command.arguments[i])
+		syntax += " " + argumentLabel(&command.arguments[i])
 	}
 	if command.subcommandRequired {
-		usage += " <COMMAND>"
+		syntax += " <COMMAND>"
 	}
-	return usage
+	return syntax
+}
+
+func usageCommandLine(path []string, syntax string) string {
+	return strings.Join(path, " ") + " " + syntax
 }
 
 func argumentLabel(argument *Argument) string {
@@ -652,6 +671,26 @@ func validGroupKind(value OptionGroupKind) bool {
 }
 
 func validateHelp(command *Command) error {
+	if len(command.usageVariants) > 0 && command.subcommandRequired {
+		return invalidSpec(
+			"command %q declares Help usage variants while requiring a subcommand",
+			command.name,
+		)
+	}
+	usageIDs := map[string]struct{}{}
+	for _, variant := range command.usageVariants {
+		if !validID(variant.id) || has(usageIDs, variant.id) || !validUsageSyntax(variant.syntax) {
+			return invalidSpec("command %q has an invalid Help usage variant %q", command.name, variant.id)
+		}
+		if len(command.subcommands) > 0 && variant.id == "subcommand" {
+			return invalidSpec(
+				"command %q Help usage variant %q conflicts with a generated variant",
+				command.name,
+				variant.id,
+			)
+		}
+		usageIDs[variant.id] = struct{}{}
+	}
 	for _, example := range command.examples {
 		if example.Name == "" || example.Invocation == "" ||
 			!utf8.ValidString(example.Name) || !utf8.ValidString(example.Invocation) {
@@ -688,6 +727,19 @@ func validateHelp(command *Command) error {
 		}
 	}
 	return nil
+}
+
+func validUsageSyntax(syntax string) bool {
+	if syntax == "" || !utf8.ValidString(syntax) ||
+		syntax[0] == ' ' || syntax[len(syntax)-1] == ' ' {
+		return false
+	}
+	for index := 0; index < len(syntax); index++ {
+		if syntax[index] < 0x20 || syntax[index] == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func cloneSet(source map[string]struct{}) map[string]struct{} {

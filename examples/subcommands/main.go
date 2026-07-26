@@ -11,7 +11,7 @@ import (
 func application() *cli.Command {
 	return cli.NewCommand("service").
 		About("Manage a service").
-		Version("0.2.0").
+		Version("0.3.1").
 		RequireSubcommand().
 		Subcommand(
 			cli.NewCommand("start").

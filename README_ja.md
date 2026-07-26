@@ -14,7 +14,7 @@ Helpのterminal Cell幅計算にNagi Textを使用し、Nagi SurfaceとNagi TUI�
 ## 導入
 
 ```sh
-go get github.com/mayahiro/nagicli-go@v0.2.0
+go get github.com/mayahiro/nagicli-go@v0.3.1
 ```
 
 ## Quick start
@@ -31,7 +31,7 @@ go run ./examples/basic Nagi
 - Positional argument、nested subcommand、alias、`--` terminator
 - Raw byte string、UTF-8 string、signed 64-bit integer、finite value、custom typed parser
 - Source-aware option relation、4種類のportable option-group rule、typed Invocation validator
-- Structured deterministic Help、custom sectionとrenderer、`help [COMMAND...]`
+- Structured deterministic Help、stable Usage Variant、custom sectionとrenderer、`help [COMMAND...]`
 - 安定Diagnostic codeとcategory、設定可能なrenderingとexit-code mapping
 - 注入可能なstdin、stdout、stderr、environment、current directory、`context.Context` cancellation
 - `clitest` packageによるprocessなしのapplication test
@@ -57,7 +57,7 @@ go test ./examples/basic
 
 ## 制約
 
-Shell completion、設定file読み込み、interactive prompt、TUI統合は提供しません。長時間実行するHandlerは注入されたcancellation contextを協調的に確認する必要があります。Portable graphは任意のinvocation grammarを表現しません
+Shell completion、設定file読み込み、interactive prompt、TUI統合は提供しません。長時間実行するHandlerは注入されたcancellation contextを協調的に確認する必要があります。Portable graphは任意のinvocation grammarを表現しません。Help-only Usage Variantはparser semanticsを変更せずにvalidatorで支えるformを記述できます
 
 ## License
 

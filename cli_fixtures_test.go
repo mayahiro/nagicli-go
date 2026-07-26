@@ -217,6 +217,8 @@ func fixtureCommand() *cli.Command {
 			cli.NewCommand("serve").
 				Alias("s").
 				About("Serve files").
+				UsageVariant("host", "<HOST> [OPTIONS]").
+				UsageVariant("mode", "--mode <http|https> <HOST> [OPTIONS]").
 				Option(cli.ValueOption("port").Long("port").Short('p').Parser(cli.IntegerParser()).Default("8080").Help("Port")).
 				Option(cli.ValueOption("mode").Long("mode").Short('m').Parser(cli.PossibleValuesParser("http", "https")).Required().Help("Mode")).
 				Option(cli.ValueOption("header").Long("header").Short('H').Repeated().Help("Header value")).
