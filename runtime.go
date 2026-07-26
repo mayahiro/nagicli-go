@@ -112,19 +112,30 @@ type Handler func(context *Context, invocation *Invocation) (Outcome, error)
 
 // Run parses and executes arguments through an injected Context
 func (c *Command) Run(context *Context, arguments []string) (Outcome, error) {
+	return c.RunWithPolicy(context, arguments, DefaultRuntimePolicy())
+}
+
+// RunWithPolicy parses and executes arguments through an explicit Runtime Policy
+func (c *Command) RunWithPolicy(
+	context *Context,
+	arguments []string,
+	policy RuntimePolicy,
+) (Outcome, error) {
 	if context == nil {
 		return Outcome{}, errors.New("nagi cli: nil Context")
 	}
+	policy = policy.normalized()
 	result, err := c.ParseWithEnvironment(arguments, context.EnvironmentValues())
 	if err != nil {
-		return renderError(context.stderr, err)
+		return renderError(context.stderr, err, policy)
 	}
 	switch result.Kind() {
 	case ParseHelp:
-		help, err := c.RenderHelp(result.CommandPath())
+		document, err := c.HelpDocument(result.CommandPath())
 		if err != nil {
 			return Outcome{}, err
 		}
+		help := policy.helpRenderer.RenderHelp(document)
 		if err := writeString(context.stdout, help); err != nil {
 			return Outcome{}, err
 		}
@@ -135,15 +146,19 @@ func (c *Command) Run(context *Context, arguments []string) (Outcome, error) {
 		}
 		return Success(), nil
 	case ParseInvocation:
-		return c.runInvocation(context, result.Invocation())
+		return c.runInvocation(context, result.Invocation(), policy)
 	default:
 		return Outcome{}, errors.New("nagi cli: unknown parse result")
 	}
 }
 
-func (c *Command) runInvocation(context *Context, invocation *Invocation) (Outcome, error) {
+func (c *Command) runInvocation(
+	context *Context,
+	invocation *Invocation,
+	policy RuntimePolicy,
+) (Outcome, error) {
 	if context.cancellation.Err() != nil {
-		return NewOutcome(StatusCancelled), nil
+		return NewOutcome(policy.exitCodes.StatusFor(CategoryCancellation)), nil
 	}
 	command := c.commandAtPath(invocation.CommandPath())
 	if command == nil {
@@ -155,20 +170,25 @@ func (c *Command) runInvocation(context *Context, invocation *Invocation) (Outco
 			"command '"+command.name+"' has no handler",
 		)
 		diagnostic.WithCommandPath(invocation.CommandPath())
-		return renderDiagnostic(context.stderr, diagnostic)
+		return renderDiagnostic(context.stderr, diagnostic, policy)
 	}
 	outcome, err := command.handler(context, invocation)
 	if err != nil {
-		return renderError(context.stderr, err)
+		return renderError(context.stderr, err, policy)
 	}
 	if context.cancellation.Err() != nil && outcome.Status() == StatusSuccess {
-		return NewOutcome(StatusCancelled), nil
+		return NewOutcome(policy.exitCodes.StatusFor(CategoryCancellation)), nil
 	}
 	return outcome, nil
 }
 
 // RunProcess executes this command against the current process and returns its status
 func (c *Command) RunProcess() (ExitStatus, error) {
+	return c.RunProcessWithPolicy(DefaultRuntimePolicy())
+}
+
+// RunProcessWithPolicy executes this command with an explicit Runtime Policy
+func (c *Command) RunProcessWithPolicy(policy RuntimePolicy) (ExitStatus, error) {
 	cancellation, stop := signal.NotifyContext(stdcontext.Background(), os.Interrupt)
 	defer stop()
 	currentDirectory, err := os.Getwd()
@@ -183,26 +203,30 @@ func (c *Command) RunProcess() (ExitStatus, error) {
 		currentDirectory,
 		cancellation,
 	)
-	outcome, err := c.Run(context, os.Args[1:])
+	outcome, err := c.RunWithPolicy(context, os.Args[1:], policy)
 	if err != nil {
 		return StatusFailure, err
 	}
 	return outcome.Status(), nil
 }
 
-func renderError(writer io.Writer, err error) (Outcome, error) {
+func renderError(writer io.Writer, err error, policy RuntimePolicy) (Outcome, error) {
 	var diagnostic *Diagnostic
 	if !errors.As(err, &diagnostic) {
 		diagnostic = NewDiagnostic(CodeHandlerError, err.Error())
 	}
-	return renderDiagnostic(writer, diagnostic)
+	return renderDiagnostic(writer, diagnostic, policy)
 }
 
-func renderDiagnostic(writer io.Writer, diagnostic *Diagnostic) (Outcome, error) {
-	if err := writeString(writer, diagnostic.Render()); err != nil {
+func renderDiagnostic(
+	writer io.Writer,
+	diagnostic *Diagnostic,
+	policy RuntimePolicy,
+) (Outcome, error) {
+	if err := writeString(writer, policy.diagnosticRenderer.RenderDiagnostic(diagnostic)); err != nil {
 		return Outcome{}, err
 	}
-	return NewOutcome(diagnostic.Status()), nil
+	return NewOutcome(policy.exitCodes.StatusFor(diagnostic.Category())), nil
 }
 
 func writeString(writer io.Writer, value string) error {

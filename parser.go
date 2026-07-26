@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -13,6 +14,7 @@ type invocationValue struct {
 	count    uint64
 	values   []ParsedValue
 	repeated bool
+	supplied bool
 }
 
 // Invocation is one canonical parsed command path and its typed values
@@ -30,6 +32,12 @@ func (i *Invocation) CommandPath() []string {
 func (i *Invocation) Contains(id string) bool {
 	_, ok := i.values[id]
 	return ok
+}
+
+// Supplied reports whether an ID was present in argv
+func (i *Invocation) Supplied(id string) bool {
+	value, ok := i.values[id]
+	return ok && value.supplied
 }
 
 // Flag returns Boolean presence when the ID denotes a flag
@@ -158,6 +166,9 @@ type argumentParser struct {
 }
 
 func (p *argumentParser) parse() (ParseResult, error) {
+	if result, matched, err := p.parseHelpCommand(); matched || err != nil {
+		return result, err
+	}
 	for p.index < len(p.arguments) {
 		argument := p.arguments[p.index]
 		switch {
@@ -189,16 +200,53 @@ func (p *argumentParser) parse() (ParseResult, error) {
 	if err := p.validateValues(); err != nil {
 		return ParseResult{}, err
 	}
+	invocation := &Invocation{
+		commandPath: append([]string(nil), p.commandPath...),
+		values:      p.values,
+	}
+	if err := p.runValidators(invocation); err != nil {
+		return ParseResult{}, err
+	}
 	return ParseResult{
-		kind: ParseInvocation,
-		invocation: &Invocation{
-			commandPath: append([]string(nil), p.commandPath...),
-			values:      p.values,
-		},
+		kind:       ParseInvocation,
+		invocation: invocation,
 	}, nil
 }
 
 func (p *argumentParser) active() *Command { return p.commands[len(p.commands)-1] }
+
+func (p *argumentParser) parseHelpCommand() (ParseResult, bool, error) {
+	if len(p.arguments) == 0 || p.arguments[0] != "help" {
+		return ParseResult{}, false, nil
+	}
+	command := p.root
+	path := []string{p.root.name}
+	for _, target := range p.arguments[1:] {
+		var selected *Command
+		for _, child := range command.subcommands {
+			if child.name == target {
+				selected = child
+				break
+			}
+			for _, alias := range child.aliases {
+				if alias == target {
+					selected = child
+					break
+				}
+			}
+			if selected != nil {
+				break
+			}
+		}
+		if selected == nil {
+			p.commandPath = path
+			return ParseResult{}, true, p.diag(CodeUnknownCommand, "unknown command "+quoteValue(target))
+		}
+		command = selected
+		path = append(path, command.name)
+	}
+	return ParseResult{kind: ParseHelp, commandPath: path}, true, nil
+}
 
 func (p *argumentParser) parseLong(argument string) (ParseResult, bool, error) {
 	body := argument[2:]
@@ -288,13 +336,14 @@ func (p *argumentParser) applyOption(option *OptionSpec, attached *string) error
 		if _, duplicate := p.values[option.id]; duplicate {
 			return p.diag(CodeDuplicateOption, fmt.Sprintf("option %q was provided more than once", optionDisplay(option)))
 		}
-		p.values[option.id] = invocationValue{kind: OptionFlag, flag: true}
+		p.values[option.id] = invocationValue{kind: OptionFlag, flag: true, supplied: true}
 	case OptionCount:
 		if attached != nil {
 			return p.diag(CodeUnexpectedOptionValue, fmt.Sprintf("option %q does not take a value", optionDisplay(option)))
 		}
 		value := p.values[option.id]
 		value.kind = OptionCount
+		value.supplied = true
 		if value.count != math.MaxUint64 {
 			value.count++
 		}
@@ -413,13 +462,13 @@ func (p *argumentParser) validateValues() error {
 				continue
 			}
 			for _, required := range option.requires {
-				if _, ok := p.values[required]; !ok {
-					return p.diag(CodeRequires, fmt.Sprintf("option %q requires %q", optionDisplay(option), required))
+				if p.present(option.id, required.presence) && !p.present(required.id, required.presence) {
+					return p.diag(CodeRequires, fmt.Sprintf("option %q requires %q", optionDisplay(option), required.id))
 				}
 			}
 			for _, conflict := range option.conflicts {
-				if _, ok := p.values[conflict]; ok {
-					return p.diag(CodeConflicts, fmt.Sprintf("option %q conflicts with %q", optionDisplay(option), conflict))
+				if p.present(option.id, conflict.presence) && p.present(conflict.id, conflict.presence) {
+					return p.diag(CodeConflicts, fmt.Sprintf("option %q conflicts with %q", optionDisplay(option), conflict.id))
 				}
 			}
 		}
@@ -428,6 +477,57 @@ func (p *argumentParser) validateValues() error {
 			if _, present := p.values[argument.id]; argument.required && !present {
 				return p.diag(CodeMissingRequired, fmt.Sprintf("required argument %q is missing", argument.id))
 			}
+		}
+		for index := range command.optionGroups {
+			group := &command.optionGroups[index]
+			count := 0
+			for _, id := range group.options {
+				if p.present(id, group.presence) {
+					count++
+				}
+			}
+			valid := false
+			switch group.kind {
+			case GroupAtMostOne:
+				valid = count <= 1
+			case GroupExactlyOne:
+				valid = count == 1
+			case GroupAtLeastOne:
+				valid = count >= 1
+			case GroupAllOrNone:
+				valid = count == 0 || count == len(group.options)
+			}
+			if !valid {
+				return p.diag(
+					CodeOptionGroup,
+					fmt.Sprintf("option group %q is not satisfied", group.id),
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func (p *argumentParser) present(id string, basis PresenceBasis) bool {
+	value, ok := p.values[id]
+	if !ok {
+		return false
+	}
+	return basis == PresenceResolved || value.supplied
+}
+
+func (p *argumentParser) runValidators(invocation *Invocation) error {
+	for _, command := range p.commands {
+		for _, validator := range command.validators {
+			err := validator(invocation)
+			if err == nil {
+				continue
+			}
+			var diagnostic *Diagnostic
+			if !errors.As(err, &diagnostic) {
+				diagnostic = NewDiagnostic(CodeValidation, err.Error())
+			}
+			return diagnostic.withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
 		}
 	}
 	return nil
@@ -445,6 +545,9 @@ func (p *argumentParser) pushValue(id string, parsed ParsedValue, repeated bool)
 	value := p.values[id]
 	value.kind = OptionValue
 	value.repeated = repeated
+	if parsed.Source() == SourceCommandLine {
+		value.supplied = true
+	}
 	value.values = append(value.values, parsed)
 	p.values[id] = value
 }

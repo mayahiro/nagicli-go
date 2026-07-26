@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -35,7 +36,15 @@ func TestParsingMatchesSharedFixtures(t *testing.T) {
 }
 
 func TestErrorsMatchSharedFixtures(t *testing.T) {
-	records := loadFixtures(t, "cli/errors.txt", "cli-errors", "argv", "env", "expected")
+	records := loadFixtures(
+		t,
+		"cli/errors.txt",
+		"cli-errors",
+		"argv",
+		"env",
+		"expected",
+		"category",
+	)
 	command := fixtureCommand()
 	for _, record := range records {
 		record := record
@@ -50,6 +59,9 @@ func TestErrorsMatchSharedFixtures(t *testing.T) {
 			}
 			if got, want := string(diagnostic.Code()), record.Field("expected"); got != want {
 				t.Fatalf("code = %q, want %q", got, want)
+			}
+			if got, want := string(diagnostic.Category()), record.Field("category"); got != want {
+				t.Fatalf("category = %q, want %q", got, want)
 			}
 		})
 	}
@@ -86,6 +98,9 @@ func TestRuntimeMatchesSharedFixtures(t *testing.T) {
 		"stdin",
 		"cwd",
 		"cancelled",
+		"usage-status",
+		"error-prefix",
+		"show-usage",
 		"status",
 		"stdout",
 		"stderr",
@@ -108,7 +123,25 @@ func TestRuntimeMatchesSharedFixtures(t *testing.T) {
 				record.Field("cwd"),
 				cancellation,
 			)
-			outcome, err := runtimeCommand().Run(runtime, arguments(record.Bytes("argv")))
+			usageStatus, err := strconv.ParseUint(record.Field("usage-status"), 10, 8)
+			if err != nil {
+				t.Fatal(err)
+			}
+			exitCodes := cli.DefaultExitCodePolicy().WithStatus(
+				cli.CategoryUsage,
+				cli.ExitStatus(usageStatus),
+			)
+			renderer := cli.DefaultPlainDiagnosticRenderer().
+				WithPrefix(record.Field("error-prefix")).
+				WithUsage(record.Field("show-usage") == "true")
+			policy := cli.DefaultRuntimePolicy().
+				WithExitCodePolicy(exitCodes).
+				WithDiagnosticRenderer(renderer)
+			outcome, err := runtimeCommand().RunWithPolicy(
+				runtime,
+				arguments(record.Bytes("argv")),
+				policy,
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -133,6 +166,9 @@ func TestDefinitionValidationAndTypedValuesArePublic(t *testing.T) {
 	var diagnostic *cli.Diagnostic
 	if !errors.As(err, &diagnostic) || diagnostic.Code() != cli.CodeInvalidSpecification {
 		t.Fatalf("Validate error = %v", err)
+	}
+	if diagnostic.Category() != cli.CategorySpecification {
+		t.Fatalf("Validate category = %q", diagnostic.Category())
 	}
 
 	result, err := fixtureCommand().Parse([]string{"serve", "--mode", "http", "--port", "42", "host"})
@@ -159,8 +195,24 @@ func fixtureCommand() *cli.Command {
 		Option(cli.Flag("force").Long("force").Short('f').Conflicts("dry-run").Help("Force operation")).
 		Option(cli.Flag("dry-run").Long("dry-run").Short('n').Help("Dry run")).
 		Option(cli.ValueOption("token").Long("token").Requires("config").Help("Token value")).
+		OptionGroup(cli.AtMostOne("output-mode", "color", "output")).
 		Argument(cli.Positional("input").Help("Input value")).
 		Argument(cli.Positional("extra").Repeated().Help("Extra values")).
+		Example("basic", "nagi file").
+		Note("Values use command line, environment, then default precedence").
+		Link("guide", "https://github.com/mayahiro/nagi/blob/main/docs/CLI_API.md").
+		HelpSection(
+			cli.NewHelpSection("output-formats", "Output formats").
+				Entry("plain", "Default deterministic text").
+				Paragraph("Custom renderers consume the same Help Document"),
+		).
+		Validator(func(invocation *cli.Invocation) error {
+			input, _ := invocation.RawValue("input")
+			if input == "blocked" {
+				return cli.NewDiagnostic(cli.CodeValidation, "input 'blocked' is not allowed")
+			}
+			return nil
+		}).
 		Subcommand(
 			cli.NewCommand("serve").
 				Alias("s").

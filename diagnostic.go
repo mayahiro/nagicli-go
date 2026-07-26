@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 )
 
-// DiagnosticCode is a stable machine-readable failure category
+// DiagnosticCode is a stable machine-readable failure code
 type DiagnosticCode string
 
 const (
@@ -35,6 +35,10 @@ const (
 	CodeRequires DiagnosticCode = "requires"
 	// CodeConflicts reports two conflicting options
 	CodeConflicts DiagnosticCode = "conflicts"
+	// CodeOptionGroup reports an option-group cardinality violation
+	CodeOptionGroup DiagnosticCode = "option-group"
+	// CodeValidation reports a language-native Invocation validator rejection
+	CodeValidation DiagnosticCode = "validation"
 	// CodeMissingHandler reports a selected command without a handler
 	CodeMissingHandler DiagnosticCode = "missing-handler"
 	// CodeHandlerError reports an application handler failure
@@ -59,33 +63,39 @@ const (
 	StatusCancelled ExitStatus = 130
 )
 
+// DiagnosticCategory is a stable semantic failure category
+type DiagnosticCategory string
+
+const (
+	// CategorySpecification reports an invalid Command Graph
+	CategorySpecification DiagnosticCategory = "specification"
+	// CategoryUsage reports invalid command-line usage
+	CategoryUsage DiagnosticCategory = "usage"
+	// CategoryExecution reports application execution failure
+	CategoryExecution DiagnosticCategory = "execution"
+	// CategoryCancellation reports cooperative cancellation
+	CategoryCancellation DiagnosticCategory = "cancellation"
+	// CategoryIO reports an injected I/O failure
+	CategoryIO DiagnosticCategory = "io"
+)
+
 // Diagnostic is a structured definition, parser, or handler failure
 type Diagnostic struct {
 	code        DiagnosticCode
+	category    DiagnosticCategory
 	message     string
 	commandPath []string
 	usage       string
-	status      ExitStatus
 }
 
-// NewDiagnostic constructs a Diagnostic with the default status for its code
+// NewDiagnostic constructs a Diagnostic with the semantic category for its code
 func NewDiagnostic(code DiagnosticCode, message string) *Diagnostic {
-	status := StatusFailure
-	switch code {
-	case CodeInvalidSpecification, CodeUnknownOption, CodeUnexpectedOptionValue,
-		CodeMissingOptionValue, CodeDuplicateOption, CodeUnknownCommand,
-		CodeMissingSubcommand, CodeUnexpectedArgument, CodeMissingRequired,
-		CodeInvalidValue, CodeRequires, CodeConflicts:
-		status = StatusUsage
-	case CodeCancelled:
-		status = StatusCancelled
-	}
-	return &Diagnostic{code: code, message: message, status: status}
+	return &Diagnostic{code: code, category: categoryForCode(code), message: message}
 }
 
-// WithStatus overrides the outcome status and returns the receiver
-func (d *Diagnostic) WithStatus(status ExitStatus) *Diagnostic {
-	d.status = status
+// WithCategory overrides the semantic category and returns the receiver
+func (d *Diagnostic) WithCategory(category DiagnosticCategory) *Diagnostic {
+	d.category = category
 	return d
 }
 
@@ -104,6 +114,9 @@ func (d *Diagnostic) WithUsage(usage string) *Diagnostic {
 // Code returns the stable diagnostic code
 func (d *Diagnostic) Code() DiagnosticCode { return d.code }
 
+// Category returns the semantic failure category
+func (d *Diagnostic) Category() DiagnosticCategory { return d.category }
+
 // Message returns the human-readable message
 func (d *Diagnostic) Message() string { return d.message }
 
@@ -115,16 +128,9 @@ func (d *Diagnostic) CommandPath() []string {
 // Usage returns one usage line without the prefix
 func (d *Diagnostic) Usage() string { return d.usage }
 
-// Status returns the associated Exit Status
-func (d *Diagnostic) Status() ExitStatus { return d.status }
-
 // Render returns deterministic plain text with one final newline
 func (d *Diagnostic) Render() string {
-	result := fmt.Sprintf("error[%s]: %s\n", d.code, d.message)
-	if d.usage != "" {
-		result += "usage: " + d.usage + "\n"
-	}
-	return result
+	return DefaultPlainDiagnosticRenderer().RenderDiagnostic(d)
 }
 
 // Error implements error without a trailing newline
@@ -159,4 +165,22 @@ func displayValue(value string) string {
 
 func quoteValue(value string) string {
 	return "'" + displayValue(value) + "'"
+}
+
+func categoryForCode(code DiagnosticCode) DiagnosticCategory {
+	switch code {
+	case CodeInvalidSpecification:
+		return CategorySpecification
+	case CodeUnknownOption, CodeUnexpectedOptionValue, CodeMissingOptionValue,
+		CodeDuplicateOption, CodeUnknownCommand, CodeMissingSubcommand,
+		CodeUnexpectedArgument, CodeMissingRequired, CodeInvalidValue,
+		CodeRequires, CodeConflicts, CodeOptionGroup, CodeValidation:
+		return CategoryUsage
+	case CodeCancelled:
+		return CategoryCancellation
+	case CodeIOError:
+		return CategoryIO
+	default:
+		return CategoryExecution
+	}
 }

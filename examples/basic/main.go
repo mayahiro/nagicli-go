@@ -13,6 +13,9 @@ func application() *cli.Command {
 		About("Print a greeting").
 		Version("0.2.0").
 		Argument(cli.Positional("name").Parser(cli.StringParser()).Required().Help("Name to greet")).
+		Example("named greeting", "greet Nagi").
+		Note("Help and diagnostics are written separately from command output").
+		Link("guide", "https://github.com/mayahiro/nagi/blob/main/docs/CLI_API.md").
 		Handle(func(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, error) {
 			name, ok := cli.ValueAs[string](invocation, "name")
 			if !ok {

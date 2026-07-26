@@ -16,6 +16,7 @@ type Driver struct {
 	environment      map[string]string
 	currentDirectory string
 	cancelled        bool
+	policy           cli.RuntimePolicy
 }
 
 // New constructs a Driver with empty input and / as its current directory
@@ -24,6 +25,7 @@ func New(command *cli.Command) *Driver {
 		command:          command,
 		environment:      map[string]string{},
 		currentDirectory: "/",
+		policy:           cli.DefaultRuntimePolicy(),
 	}
 }
 
@@ -57,6 +59,12 @@ func (d *Driver) Cancelled(cancelled bool) *Driver {
 	return d
 }
 
+// Policy sets Help, Diagnostic, and exit-code runtime behavior
+func (d *Driver) Policy(policy cli.RuntimePolicy) *Driver {
+	d.policy = policy
+	return d
+}
+
 // Run executes the application without a child process or signal handler
 func (d *Driver) Run() (Result, error) {
 	if d.command == nil {
@@ -77,7 +85,7 @@ func (d *Driver) Run() (Result, error) {
 		d.currentDirectory,
 		cancellation,
 	)
-	outcome, err := d.command.Run(runtime, d.arguments)
+	outcome, err := d.command.RunWithPolicy(runtime, d.arguments, d.policy)
 	if err != nil {
 		return Result{}, err
 	}

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
-
-	nagitext "github.com/mayahiro/nagi-go/text"
 )
 
 // OptionKind controls option storage and parsing
@@ -20,6 +18,35 @@ const (
 	OptionValue
 )
 
+// PresenceBasis selects resolved or command-line presence for validation
+type PresenceBasis uint8
+
+const (
+	// PresenceResolved counts values from command line, environment, or default
+	PresenceResolved PresenceBasis = iota
+	// PresenceCommandLine counts only values supplied in argv
+	PresenceCommandLine
+)
+
+// OptionGroupKind controls how many group members may be present
+type OptionGroupKind uint8
+
+const (
+	// GroupAtMostOne accepts zero or one present option
+	GroupAtMostOne OptionGroupKind = iota
+	// GroupExactlyOne accepts exactly one present option
+	GroupExactlyOne
+	// GroupAtLeastOne accepts one or more present options
+	GroupAtLeastOne
+	// GroupAllOrNone accepts zero options or every option
+	GroupAllOrNone
+)
+
+type optionRelation struct {
+	id       string
+	presence PresenceBasis
+}
+
 // OptionSpec defines one named command option
 type OptionSpec struct {
 	id          string
@@ -33,8 +60,8 @@ type OptionSpec struct {
 	environment string
 	defaultSet  bool
 	defaultVal  string
-	requires    []string
-	conflicts   []string
+	requires    []optionRelation
+	conflicts   []optionRelation
 }
 
 // Flag constructs a Boolean option
@@ -82,13 +109,33 @@ func (o *OptionSpec) Default(value string) *OptionSpec {
 
 // Requires adds an option requirement
 func (o *OptionSpec) Requires(id string) *OptionSpec {
-	o.requires = append(o.requires, id)
+	return o.RequiresWithPresence(id, PresenceResolved)
+}
+
+// RequiresSupplied requires another command-line-supplied option
+func (o *OptionSpec) RequiresSupplied(id string) *OptionSpec {
+	return o.RequiresWithPresence(id, PresenceCommandLine)
+}
+
+// RequiresWithPresence adds an option requirement with an explicit presence basis
+func (o *OptionSpec) RequiresWithPresence(id string, presence PresenceBasis) *OptionSpec {
+	o.requires = append(o.requires, optionRelation{id: id, presence: presence})
 	return o
 }
 
 // Conflicts adds a conflicting option
 func (o *OptionSpec) Conflicts(id string) *OptionSpec {
-	o.conflicts = append(o.conflicts, id)
+	return o.ConflictsWithPresence(id, PresenceResolved)
+}
+
+// ConflictsSupplied conflicts with another command-line-supplied option
+func (o *OptionSpec) ConflictsSupplied(id string) *OptionSpec {
+	return o.ConflictsWithPresence(id, PresenceCommandLine)
+}
+
+// ConflictsWithPresence adds a conflict with an explicit presence basis
+func (o *OptionSpec) ConflictsWithPresence(id string, presence PresenceBasis) *OptionSpec {
+	o.conflicts = append(o.conflicts, optionRelation{id: id, presence: presence})
 	return o
 }
 
@@ -127,6 +174,66 @@ func (a *Argument) Repeated() *Argument { a.repeated = true; return a }
 // ID returns the stable value identifier
 func (a *Argument) ID() string { return a.id }
 
+// OptionGroup applies one cardinality rule to local command options
+type OptionGroup struct {
+	id       string
+	kind     OptionGroupKind
+	presence PresenceBasis
+	options  []string
+}
+
+// AtMostOne constructs an optional mutually exclusive option group
+func AtMostOne(id string, optionIDs ...string) *OptionGroup {
+	return newOptionGroup(id, GroupAtMostOne, optionIDs)
+}
+
+// ExactlyOne constructs a required mutually exclusive option group
+func ExactlyOne(id string, optionIDs ...string) *OptionGroup {
+	return newOptionGroup(id, GroupExactlyOne, optionIDs)
+}
+
+// AtLeastOne constructs a group requiring one or more options
+func AtLeastOne(id string, optionIDs ...string) *OptionGroup {
+	return newOptionGroup(id, GroupAtLeastOne, optionIDs)
+}
+
+// AllOrNone constructs a group whose options must occur together
+func AllOrNone(id string, optionIDs ...string) *OptionGroup {
+	return newOptionGroup(id, GroupAllOrNone, optionIDs)
+}
+
+func newOptionGroup(id string, kind OptionGroupKind, optionIDs []string) *OptionGroup {
+	return &OptionGroup{
+		id:       id,
+		kind:     kind,
+		presence: PresenceCommandLine,
+		options:  append([]string(nil), optionIDs...),
+	}
+}
+
+// Presence changes how this group determines whether an option is present
+func (g *OptionGroup) Presence(presence PresenceBasis) *OptionGroup {
+	g.presence = presence
+	return g
+}
+
+// ID returns the stable group identifier
+func (g *OptionGroup) ID() string { return g.id }
+
+// Kind returns the group cardinality rule
+func (g *OptionGroup) Kind() OptionGroupKind { return g.kind }
+
+// PresenceBasis returns the group's presence basis
+func (g *OptionGroup) PresenceBasis() PresenceBasis { return g.presence }
+
+// OptionIDs returns a copy of group members in definition order
+func (g *OptionGroup) OptionIDs() []string {
+	return append([]string(nil), g.options...)
+}
+
+// InvocationValidator performs application-specific typed validation
+type InvocationValidator func(invocation *Invocation) error
+
 // Command is one validated node in a Command Graph
 type Command struct {
 	id                 string
@@ -136,8 +243,14 @@ type Command struct {
 	version            string
 	options            []OptionSpec
 	arguments          []Argument
+	optionGroups       []OptionGroup
 	subcommands        []*Command
 	subcommandRequired bool
+	examples           []HelpExample
+	notes              []string
+	links              []HelpLink
+	helpSections       []HelpSection
+	validators         []InvocationValidator
 	handler            Handler
 }
 
@@ -164,8 +277,8 @@ func (c *Command) Version(version string) *Command { c.version = version; return
 // Option appends an option in help-definition order
 func (c *Command) Option(option *OptionSpec) *Command {
 	copy := *option
-	copy.requires = append([]string(nil), option.requires...)
-	copy.conflicts = append([]string(nil), option.conflicts...)
+	copy.requires = append([]optionRelation(nil), option.requires...)
+	copy.conflicts = append([]optionRelation(nil), option.conflicts...)
 	c.options = append(c.options, copy)
 	return c
 }
@@ -173,6 +286,14 @@ func (c *Command) Option(option *OptionSpec) *Command {
 // Argument appends a positional in consumption order
 func (c *Command) Argument(argument *Argument) *Command {
 	c.arguments = append(c.arguments, *argument)
+	return c
+}
+
+// OptionGroup appends one portable option-group constraint
+func (c *Command) OptionGroup(group *OptionGroup) *Command {
+	copy := *group
+	copy.options = append([]string(nil), group.options...)
+	c.optionGroups = append(c.optionGroups, copy)
 	return c
 }
 
@@ -185,6 +306,36 @@ func (c *Command) Subcommand(command *Command) *Command {
 // RequireSubcommand requires one child command to be selected
 func (c *Command) RequireSubcommand() *Command {
 	c.subcommandRequired = true
+	return c
+}
+
+// Example appends one named command-line example
+func (c *Command) Example(name, invocation string) *Command {
+	c.examples = append(c.examples, HelpExample{Name: name, Invocation: invocation})
+	return c
+}
+
+// Note appends one structured Help note
+func (c *Command) Note(note string) *Command {
+	c.notes = append(c.notes, note)
+	return c
+}
+
+// Link appends one labeled documentation link
+func (c *Command) Link(label, url string) *Command {
+	c.links = append(c.links, HelpLink{Label: label, URL: url})
+	return c
+}
+
+// HelpSection appends one application-defined structured Help section
+func (c *Command) HelpSection(section *HelpSection) *Command {
+	c.helpSections = append(c.helpSections, cloneHelpSection(*section))
+	return c
+}
+
+// Validator appends one language-native typed Invocation validator
+func (c *Command) Validator(validator InvocationValidator) *Command {
+	c.validators = append(c.validators, validator)
 	return c
 }
 
@@ -203,57 +354,6 @@ func (c *Command) Description() string { return c.about }
 // Validate checks the entire Command Graph before argv is consumed
 func (c *Command) Validate() error {
 	return validateCommand(c, true, map[string]struct{}{})
-}
-
-// RenderHelp renders deterministic help for a canonical command path
-func (c *Command) RenderHelp(path []string) (string, error) {
-	if err := c.Validate(); err != nil {
-		return "", err
-	}
-	command := c.commandAtPath(path)
-	if command == nil {
-		return "", NewDiagnostic(CodeInvalidSpecification, "help path does not identify a command")
-	}
-	var output strings.Builder
-	if command.about != "" {
-		output.WriteString(command.about)
-		output.WriteString("\n\n")
-	}
-	output.WriteString("Usage:\n  ")
-	output.WriteString(usageLine(command, path))
-	output.WriteByte('\n')
-	if len(command.subcommands) > 0 && !command.subcommandRequired {
-		fmt.Fprintf(&output, "  %s [OPTIONS] <COMMAND>\n", strings.Join(path, " "))
-	}
-	if len(command.subcommands) > 0 {
-		output.WriteString("\nCommands:\n")
-		entries := make([]helpEntry, 0, len(command.subcommands))
-		for _, child := range command.subcommands {
-			entries = append(entries, helpEntry{child.name, child.about})
-		}
-		renderEntries(&output, entries)
-	}
-	if len(command.arguments) > 0 {
-		output.WriteString("\nArguments:\n")
-		entries := make([]helpEntry, 0, len(command.arguments))
-		for i := range command.arguments {
-			argument := &command.arguments[i]
-			entries = append(entries, helpEntry{argumentLabel(argument), argument.help})
-		}
-		renderEntries(&output, entries)
-	}
-	output.WriteString("\nOptions:\n")
-	entries := make([]helpEntry, 0, len(command.options)+2)
-	for i := range command.options {
-		option := &command.options[i]
-		entries = append(entries, helpEntry{optionLabel(option), optionDescription(option)})
-	}
-	entries = append(entries, helpEntry{"-h, --help", "Print help"})
-	if c.version != "" {
-		entries = append(entries, helpEntry{"-V, --version", "Print version"})
-	}
-	renderEntries(&output, entries)
-	return output.String(), nil
 }
 
 func validateCommand(command *Command, root bool, pathIDs map[string]struct{}) error {
@@ -315,6 +415,11 @@ func validateCommand(command *Command, root bool, pathIDs map[string]struct{}) e
 		if option.kind != OptionValue && (option.repeated || option.environment != "" || option.defaultSet) {
 			return invalidSpec("non-value option %q has value-only configuration", option.id)
 		}
+		for _, relation := range append(append([]optionRelation(nil), option.requires...), option.conflicts...) {
+			if !validPresence(relation.presence) {
+				return invalidSpec("option %q has an invalid relation presence", option.id)
+			}
+		}
 	}
 	for i := range command.arguments {
 		argument := &command.arguments[i]
@@ -328,14 +433,48 @@ func validateCommand(command *Command, root bool, pathIDs map[string]struct{}) e
 	}
 	for i := range command.options {
 		option := &command.options[i]
-		for _, relation := range append(append([]string(nil), option.requires...), option.conflicts...) {
-			if !has(localIDs, relation) {
-				return invalidSpec("option %q references unknown option %q", option.id, relation)
+		for _, relation := range append(append([]optionRelation(nil), option.requires...), option.conflicts...) {
+			if !has(localIDs, relation.id) {
+				return invalidSpec("option %q references unknown option %q", option.id, relation.id)
 			}
 		}
 	}
+	groupIDs := map[string]struct{}{}
+	for i := range command.optionGroups {
+		group := &command.optionGroups[i]
+		if !validID(group.id) || has(groupIDs, group.id) {
+			return invalidSpec("duplicate or invalid option group ID %q", group.id)
+		}
+		groupIDs[group.id] = struct{}{}
+		if !validGroupKind(group.kind) || !validPresence(group.presence) {
+			return invalidSpec("option group %q has an invalid kind or presence", group.id)
+		}
+		if len(group.options) < 2 {
+			return invalidSpec("option group %q has fewer than two options", group.id)
+		}
+		members := map[string]struct{}{}
+		for _, id := range group.options {
+			if !has(localIDs, id) || has(members, id) {
+				return invalidSpec("option group %q references duplicate or unknown option %q", group.id, id)
+			}
+			members[id] = struct{}{}
+		}
+	}
+	if err := validateHelp(command); err != nil {
+		return err
+	}
+	for _, validator := range command.validators {
+		if validator == nil {
+			return invalidSpec("command %q has a nil Invocation validator", command.name)
+		}
+	}
 	childSpellings := map[string]struct{}{}
+	childIDs := map[string]struct{}{}
 	for _, child := range command.subcommands {
+		if has(childIDs, child.id) {
+			return invalidSpec("command %q has duplicate child ID %q", command.name, child.id)
+		}
+		childIDs[child.id] = struct{}{}
 		spellings := append([]string{child.name}, child.aliases...)
 		for _, spelling := range spellings {
 			if has(childSpellings, spelling) {
@@ -373,6 +512,15 @@ func (c *Command) commandAtPath(path []string) *Command {
 
 func (c *Command) usageForPath(path []string) string {
 	return usageLine(c.commandAtPath(path), path)
+}
+
+func (c *Command) optionByID(id string) *OptionSpec {
+	for index := range c.options {
+		if c.options[index].id == id {
+			return &c.options[index]
+		}
+	}
+	return nil
 }
 
 func usageLine(command *Command, path []string) string {
@@ -441,29 +589,10 @@ func appendNote(description, note string) string {
 	return description + "[" + note + "]"
 }
 
-type helpEntry struct {
-	label       string
-	description string
-}
-
-func renderEntries(output *strings.Builder, entries []helpEntry) {
-	width := 0
-	for _, entry := range entries {
-		if candidate := nagitext.Width(entry.label, nagitext.ModernWidth()); candidate > width {
-			width = candidate
-		}
-	}
-	for _, entry := range entries {
-		output.WriteString("  ")
-		output.WriteString(entry.label)
-		labelWidth := nagitext.Width(entry.label, nagitext.ModernWidth())
-		output.WriteString(strings.Repeat(" ", width-labelWidth+2))
-		output.WriteString(entry.description)
-		output.WriteByte('\n')
-	}
-}
-
 func optionDisplay(option *OptionSpec) string {
+	if option == nil {
+		return ""
+	}
 	if option.long != "" {
 		return "--" + option.long
 	}
@@ -513,6 +642,53 @@ func asciiAlphanumeric(value byte) bool {
 
 func reservedLong(value string) bool { return value == "help" || value == "version" }
 func reservedShort(value byte) bool  { return value == 'h' || value == 'V' }
+
+func validPresence(value PresenceBasis) bool {
+	return value == PresenceResolved || value == PresenceCommandLine
+}
+
+func validGroupKind(value OptionGroupKind) bool {
+	return value >= GroupAtMostOne && value <= GroupAllOrNone
+}
+
+func validateHelp(command *Command) error {
+	for _, example := range command.examples {
+		if example.Name == "" || example.Invocation == "" ||
+			!utf8.ValidString(example.Name) || !utf8.ValidString(example.Invocation) {
+			return invalidSpec("command %q has an invalid Help example", command.name)
+		}
+	}
+	for _, note := range command.notes {
+		if note == "" || !utf8.ValidString(note) {
+			return invalidSpec("command %q has an invalid Help note", command.name)
+		}
+	}
+	for _, link := range command.links {
+		if link.Label == "" || link.URL == "" ||
+			!utf8.ValidString(link.Label) || !utf8.ValidString(link.URL) {
+			return invalidSpec("command %q has an invalid Help link", command.name)
+		}
+	}
+	sectionIDs := map[string]struct{}{}
+	for _, section := range command.helpSections {
+		if !validID(section.id) || has(sectionIDs, section.id) ||
+			section.heading == "" || !utf8.ValidString(section.heading) ||
+			len(section.blocks) == 0 {
+			return invalidSpec("command %q has an invalid Help section %q", command.name, section.id)
+		}
+		sectionIDs[section.id] = struct{}{}
+		for _, block := range section.blocks {
+			if block.Kind != HelpBlockParagraph && block.Kind != HelpBlockEntry {
+				return invalidSpec("Help section %q has an invalid block kind", section.id)
+			}
+			if block.Text == "" || !utf8.ValidString(block.Text) ||
+				(block.Kind == HelpBlockEntry && (block.Label == "" || !utf8.ValidString(block.Label))) {
+				return invalidSpec("Help section %q has an invalid block", section.id)
+			}
+		}
+	}
+	return nil
+}
 
 func cloneSet(source map[string]struct{}) map[string]struct{} {
 	clone := make(map[string]struct{}, len(source))

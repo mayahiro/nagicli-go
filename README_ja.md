@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-Nagi CLI Go実装は検証済みCommand Graph、typed value、注入可能なprocess service、structured Diagnostic、明示的なExit Statusを持つnative command application frameworkを提供します
+Nagi CLI Go実装は検証済みCommand Graph、typed value、注入可能なprocess service、structured HelpとDiagnostic、policyで制御するExit Statusを持つnative command application frameworkを提供します
 
 Helpのterminal Cell幅計算にNagi Textを使用し、Nagi SurfaceとNagi TUIには依存しません
 
@@ -30,7 +30,9 @@ go run ./examples/basic Nagi
 - Long、short、cluster、repeated、required、default、environment fallback付きoption
 - Positional argument、nested subcommand、alias、`--` terminator
 - Raw byte string、UTF-8 string、signed 64-bit integer、finite value、custom typed parser
-- 決定的Help、安定Diagnostic code、0、1、2、130のExit Status
+- Source-aware option relation、4種類のportable option-group rule、typed Invocation validator
+- Structured deterministic Help、custom sectionとrenderer、`help [COMMAND...]`
+- 安定Diagnostic codeとcategory、設定可能なrenderingとexit-code mapping
 - 注入可能なstdin、stdout、stderr、environment、current directory、`context.Context` cancellation
 - `clitest` packageによるprocessなしのapplication test
 
@@ -55,7 +57,7 @@ go test ./examples/basic
 
 ## 制約
 
-Shell completion、設定file読み込み、interactive prompt、TUI統合は提供しません。長時間実行するHandlerは注入されたcancellation contextを協調的に確認する必要があります
+Shell completion、設定file読み込み、interactive prompt、TUI統合は提供しません。長時間実行するHandlerは注入されたcancellation contextを協調的に確認する必要があります。Portable graphは任意のinvocation grammarを表現しません
 
 ## License
 

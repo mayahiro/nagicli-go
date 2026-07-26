@@ -59,6 +59,22 @@ func TestDriverCanCancelBeforeHandlerExecution(t *testing.T) {
 	}
 }
 
+func TestDriverUsesRuntimePolicy(t *testing.T) {
+	command := cli.NewCommand("sample").
+		Subcommand(cli.NewCommand("child"))
+	policy := cli.DefaultRuntimePolicy().WithHelpRenderer(commandPathRenderer{})
+	result, err := clitest.New(command).
+		Arguments("help", "child").
+		Policy(policy).
+		Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(result.Stdout()); got != "custom help: sample/child\n" {
+		t.Fatalf("stdout = %q", got)
+	}
+}
+
 func TestDriverReturnsOutputFailures(t *testing.T) {
 	command := cli.NewCommand("sample")
 	runtime := cli.NewContext(nil, failingWriter{}, io.Discard, nil, "/")
@@ -72,4 +88,11 @@ type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
+}
+
+type commandPathRenderer struct{}
+
+func (commandPathRenderer) RenderHelp(document cli.HelpDocument) string {
+	path := document.CommandPath()
+	return fmt.Sprintf("custom help: %s\n", path[0]+"/"+path[1])
 }

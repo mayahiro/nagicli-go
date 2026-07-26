@@ -4,7 +4,7 @@
 
 Nagi CLI for Go provides a native command-application framework with a
 validated Command Graph, typed values, injected process services, structured
-Diagnostics, and explicit Exit Status
+Help and Diagnostics, and policy-controlled Exit Status
 
 It uses Nagi Text for terminal-Cell-aware help alignment and does not depend on
 Nagi Surface or Nagi TUI
@@ -33,7 +33,9 @@ go run ./examples/basic Nagi
 - Long, short, clustered, repeated, required, defaulted, and environment-backed options
 - Positional arguments, nested subcommands, aliases, and `--` termination
 - Raw byte strings, UTF-8 strings, signed 64-bit integers, finite values, and custom typed parsers
-- Deterministic help, stable Diagnostic codes, and statuses 0, 1, 2, and 130
+- Source-aware option relations, four portable option-group rules, and typed Invocation validators
+- Structured deterministic Help, custom sections and renderers, and `help [COMMAND...]`
+- Stable Diagnostic codes and categories with configurable rendering and exit-code mapping
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
 - Process-free application tests through package `clitest`
 
@@ -63,7 +65,8 @@ Both examples are included in `go build ./...`
 
 Shell completion, configuration-file loading, interactive prompts, and TUI
 integration are not provided. Long-running handlers must poll the injected
-cancellation context cooperatively
+cancellation context cooperatively. The portable graph does not model
+arbitrary invocation grammars
 
 ## License
 

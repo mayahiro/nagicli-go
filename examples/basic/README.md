@@ -9,7 +9,8 @@ Run it from the Go repository root:
 go run ./examples/basic Nagi
 ```
 
-It prints `Hello, Nagi!`. Pass `--help` to inspect the generated help output
+It prints `Hello, Nagi!`. Pass `--help` to inspect the structured example,
+note, and link rendered with the generated command help
 
 The adjacent [`main_test.go`](main_test.go) demonstrates the same application
 through the process-free `clitest` driver
