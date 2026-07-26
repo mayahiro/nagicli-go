@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 )
 
-// DiagnosticCode is a stable machine-readable failure code
+// DiagnosticCode is a stable machine-readable framework or application code
 type DiagnosticCode string
 
 const (
@@ -79,6 +79,50 @@ const (
 	CategoryIO DiagnosticCategory = "io"
 )
 
+// DiagnosticTargetKind identifies an option or positional argument
+type DiagnosticTargetKind string
+
+const (
+	// TargetOption identifies a command option
+	TargetOption DiagnosticTargetKind = "option"
+	// TargetArgument identifies a positional argument
+	TargetArgument DiagnosticTargetKind = "argument"
+)
+
+// DiagnosticTarget identifies one command-local option or argument
+type DiagnosticTarget struct {
+	kind          DiagnosticTargetKind
+	commandIDPath []string
+	valueID       string
+}
+
+// OptionTarget constructs an option target in the current Invocation scope
+func OptionTarget(valueID string) DiagnosticTarget {
+	return DiagnosticTarget{kind: TargetOption, valueID: valueID}
+}
+
+// ArgumentTarget constructs an argument target in the current Invocation scope
+func ArgumentTarget(valueID string) DiagnosticTarget {
+	return DiagnosticTarget{kind: TargetArgument, valueID: valueID}
+}
+
+// WithCommandIDPath returns a copy with an explicit stable command-ID path
+func (t DiagnosticTarget) WithCommandIDPath(path ...string) DiagnosticTarget {
+	t.commandIDPath = append([]string(nil), path...)
+	return t
+}
+
+// Kind returns whether this target identifies an option or argument
+func (t DiagnosticTarget) Kind() DiagnosticTargetKind { return t.kind }
+
+// CommandIDPath returns a copy of the stable command-ID path
+func (t DiagnosticTarget) CommandIDPath() []string {
+	return append([]string(nil), t.commandIDPath...)
+}
+
+// ValueID returns the command-local value ID
+func (t DiagnosticTarget) ValueID() string { return t.valueID }
+
 // Diagnostic is a structured definition, parser, or handler failure
 type Diagnostic struct {
 	code        DiagnosticCode
@@ -86,6 +130,8 @@ type Diagnostic struct {
 	message     string
 	commandPath []string
 	usage       string
+	targets     []DiagnosticTarget
+	hints       []string
 }
 
 // NewDiagnostic constructs a Diagnostic with the semantic category for its code
@@ -111,6 +157,20 @@ func (d *Diagnostic) WithUsage(usage string) *Diagnostic {
 	return d
 }
 
+// WithTarget appends one structured option or argument target
+func (d *Diagnostic) WithTarget(target DiagnosticTarget) *Diagnostic {
+	copy := target
+	copy.commandIDPath = append([]string(nil), target.commandIDPath...)
+	d.targets = append(d.targets, copy)
+	return d
+}
+
+// WithHint appends one human-readable remediation hint
+func (d *Diagnostic) WithHint(hint string) *Diagnostic {
+	d.hints = append(d.hints, hint)
+	return d
+}
+
 // Code returns the stable diagnostic code
 func (d *Diagnostic) Code() DiagnosticCode { return d.code }
 
@@ -128,6 +188,21 @@ func (d *Diagnostic) CommandPath() []string {
 // Usage returns one usage line without the prefix
 func (d *Diagnostic) Usage() string { return d.usage }
 
+// Targets returns structured option and argument targets in insertion order
+func (d *Diagnostic) Targets() []DiagnosticTarget {
+	targets := make([]DiagnosticTarget, len(d.targets))
+	for index, target := range d.targets {
+		targets[index] = target
+		targets[index].commandIDPath = append([]string(nil), target.commandIDPath...)
+	}
+	return targets
+}
+
+// Hints returns human-readable remediation hints in insertion order
+func (d *Diagnostic) Hints() []string {
+	return append([]string(nil), d.hints...)
+}
+
 // Render returns deterministic plain text with one final newline
 func (d *Diagnostic) Render() string {
 	return DefaultPlainDiagnosticRenderer().RenderDiagnostic(d)
@@ -140,6 +215,15 @@ func (d *Diagnostic) Error() string {
 
 func (d *Diagnostic) withCommand(path []string, usage string) *Diagnostic {
 	return d.WithCommandPath(path).WithUsage(usage)
+}
+
+func (d *Diagnostic) withDefaultTargetPath(path []string) *Diagnostic {
+	for index := range d.targets {
+		if len(d.targets[index].commandIDPath) == 0 {
+			d.targets[index].commandIDPath = append([]string(nil), path...)
+		}
+	}
+	return d
 }
 
 func displayValue(value string) string {

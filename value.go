@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -136,15 +137,99 @@ func CustomParser[T any](metavar string, parse func(string) (T, error)) ValuePar
 	return customValueParser[T]{metavar: metavar, parse: parse}
 }
 
+// ValueLookup provides typed value access for an Invocation or exact scope
+type ValueLookup interface {
+	// ValueScopeIDPath returns the stable command-ID path used by this lookup
+	ValueScopeIDPath() []string
+	// ParsedValues returns parsed values and sources for one ID
+	ParsedValues(id string) []ParsedValue
+}
+
+type directValueLookup interface {
+	parsedValuesForLookup(id string) []ParsedValue
+}
+
+// ValueAccessErrorKind distinguishes missing values and parser type mismatches
+type ValueAccessErrorKind uint8
+
+const (
+	// ValueMissing means no resolved value exists for the requested ID
+	ValueMissing ValueAccessErrorKind = iota
+	// ValueTypeMismatch means the parser result does not have the requested type
+	ValueTypeMismatch
+)
+
+// ValueAccessError reports why required typed value access failed
+type ValueAccessError struct {
+	kind          ValueAccessErrorKind
+	commandIDPath []string
+	valueID       string
+}
+
+// Kind returns whether the value was missing or had another dynamic type
+func (e *ValueAccessError) Kind() ValueAccessErrorKind { return e.kind }
+
+// CommandIDPath returns the stable scope path used for the lookup
+func (e *ValueAccessError) CommandIDPath() []string {
+	return append([]string(nil), e.commandIDPath...)
+}
+
+// ValueID returns the requested command-local value ID
+func (e *ValueAccessError) ValueID() string { return e.valueID }
+
+// Error implements error
+func (e *ValueAccessError) Error() string {
+	reason := "is missing"
+	if e.kind == ValueTypeMismatch {
+		reason = "has an unexpected parser result type"
+	}
+	path := strings.Join(e.commandIDPath, "/")
+	if path == "" {
+		return fmt.Sprintf("value %q %s", e.valueID, reason)
+	}
+	return fmt.Sprintf("value %q in command scope %q %s", e.valueID, path, reason)
+}
+
 // ValueAs returns the first parser result when its dynamic type is T
-func ValueAs[T any](invocation *Invocation, id string) (T, bool) {
+func ValueAs[T any](values ValueLookup, id string) (T, bool) {
 	var zero T
-	values := invocation.ParsedValues(id)
-	if len(values) == 0 {
+	parsed := lookupParsedValues(values, id)
+	if len(parsed) == 0 {
 		return zero, false
 	}
-	value, ok := values[0].typed.(T)
+	value, ok := parsed[0].typed.(T)
 	return value, ok
+}
+
+// RequireValueAs returns the first parser result or a structured access error
+//
+// Environment and default values are already resolved before this lookup
+func RequireValueAs[T any](values ValueLookup, id string) (T, *ValueAccessError) {
+	var zero T
+	parsed := lookupParsedValues(values, id)
+	if len(parsed) == 0 {
+		return zero, &ValueAccessError{
+			kind:          ValueMissing,
+			commandIDPath: values.ValueScopeIDPath(),
+			valueID:       id,
+		}
+	}
+	value, ok := parsed[0].typed.(T)
+	if !ok {
+		return zero, &ValueAccessError{
+			kind:          ValueTypeMismatch,
+			commandIDPath: values.ValueScopeIDPath(),
+			valueID:       id,
+		}
+	}
+	return value, nil
+}
+
+func lookupParsedValues(values ValueLookup, id string) []ParsedValue {
+	if direct, ok := values.(directValueLookup); ok {
+		return direct.parsedValuesForLookup(id)
+	}
+	return values.ParsedValues(id)
 }
 
 func joinComma(values []string) string {

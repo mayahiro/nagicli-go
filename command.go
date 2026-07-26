@@ -231,8 +231,23 @@ func (g *OptionGroup) OptionIDs() []string {
 	return append([]string(nil), g.options...)
 }
 
-// InvocationValidator performs application-specific typed validation
-type InvocationValidator func(invocation *Invocation) error
+// InvocationValidator returns a structured application validation failure
+//
+// A nil result accepts the Invocation. The Invocation current scope is the
+// Command that declared the validator
+type InvocationValidator func(invocation *Invocation) *Diagnostic
+
+// SubcommandUsageMode selects how parent Help presents subcommand syntax
+type SubcommandUsageMode uint8
+
+const (
+	// SubcommandUsageAuto generates one generic optional-subcommand usage line
+	SubcommandUsageAuto SubcommandUsageMode = iota
+	// SubcommandUsageHidden omits generated optional-subcommand usage
+	SubcommandUsageHidden
+	// SubcommandUsageExpanded expands each immediate child's direct variants without recursion
+	SubcommandUsageExpanded
+)
 
 // Command is one validated node in a Command Graph
 type Command struct {
@@ -246,6 +261,7 @@ type Command struct {
 	optionGroups       []OptionGroup
 	subcommands        []*Command
 	subcommandRequired bool
+	subcommandUsage    SubcommandUsageMode
 	usageVariants      []usageVariant
 	examples           []HelpExample
 	notes              []string
@@ -310,6 +326,15 @@ func (c *Command) RequireSubcommand() *Command {
 	return c
 }
 
+// SubcommandUsage selects generic, hidden, or expanded child usage in Help
+//
+// It changes Help presentation only and does not change parsing, validation,
+// Diagnostics, or Invocation values
+func (c *Command) SubcommandUsage(mode SubcommandUsageMode) *Command {
+	c.subcommandUsage = mode
+	return c
+}
+
 // UsageVariant appends one Help-only invocation syntax with a stable ID
 //
 // The syntax is a non-empty suffix relative to the canonical command path
@@ -364,10 +389,10 @@ func (c *Command) Description() string { return c.about }
 
 // Validate checks the entire Command Graph before argv is consumed
 func (c *Command) Validate() error {
-	return validateCommand(c, true, map[string]struct{}{})
+	return validateCommand(c, true)
 }
 
-func validateCommand(command *Command, root bool, pathIDs map[string]struct{}) error {
+func validateCommand(command *Command, root bool) error {
 	if !validID(command.id) {
 		return invalidSpec("invalid command ID %q", command.id)
 	}
@@ -391,7 +416,7 @@ func validateCommand(command *Command, root bool, pathIDs map[string]struct{}) e
 		}
 	}
 
-	ids := cloneSet(pathIDs)
+	ids := map[string]struct{}{}
 	localIDs := map[string]struct{}{}
 	longs := map[string]struct{}{}
 	shorts := map[byte]struct{}{}
@@ -493,7 +518,7 @@ func validateCommand(command *Command, root bool, pathIDs map[string]struct{}) e
 			}
 			childSpellings[spelling] = struct{}{}
 		}
-		if err := validateCommand(child, false, cloneSet(ids)); err != nil {
+		if err := validateCommand(child, false); err != nil {
 			return err
 		}
 	}
@@ -519,6 +544,29 @@ func (c *Command) commandAtPath(path []string) *Command {
 		command = child
 	}
 	return command
+}
+
+func (c *Command) commandIDPathAtPath(path []string) []string {
+	if len(path) == 0 || path[0] != c.name {
+		return nil
+	}
+	command := c
+	ids := []string{c.id}
+	for _, name := range path[1:] {
+		var child *Command
+		for _, candidate := range command.subcommands {
+			if candidate.name == name {
+				child = candidate
+				break
+			}
+		}
+		if child == nil {
+			return nil
+		}
+		command = child
+		ids = append(ids, command.id)
+	}
+	return ids
 }
 
 func (c *Command) usageForPath(path []string) string {
@@ -671,6 +719,12 @@ func validGroupKind(value OptionGroupKind) bool {
 }
 
 func validateHelp(command *Command) error {
+	if command.subcommandUsage > SubcommandUsageExpanded {
+		return invalidSpec(
+			"command %q has an invalid subcommand usage mode",
+			command.name,
+		)
+	}
 	if len(command.usageVariants) > 0 && command.subcommandRequired {
 		return invalidSpec(
 			"command %q declares Help usage variants while requiring a subcommand",
@@ -682,7 +736,9 @@ func validateHelp(command *Command) error {
 		if !validID(variant.id) || has(usageIDs, variant.id) || !validUsageSyntax(variant.syntax) {
 			return invalidSpec("command %q has an invalid Help usage variant %q", command.name, variant.id)
 		}
-		if len(command.subcommands) > 0 && variant.id == "subcommand" {
+		if command.subcommandUsage == SubcommandUsageAuto &&
+			len(command.subcommands) > 0 &&
+			variant.id == "subcommand" {
 			return invalidSpec(
 				"command %q Help usage variant %q conflicts with a generated variant",
 				command.name,
@@ -740,14 +796,6 @@ func validUsageSyntax(syntax string) bool {
 		}
 	}
 	return true
-}
-
-func cloneSet(source map[string]struct{}) map[string]struct{} {
-	clone := make(map[string]struct{}, len(source))
-	for value := range source {
-		clone[value] = struct{}{}
-	}
-	return clone
 }
 
 func has(set map[string]struct{}, value string) bool {

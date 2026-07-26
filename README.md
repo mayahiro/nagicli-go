@@ -17,7 +17,7 @@ Nagi Surface or Nagi TUI
 ## Installation
 
 ```sh
-go get github.com/mayahiro/nagicli-go@v0.3.1
+go get github.com/mayahiro/nagicli-go@v0.3.2
 ```
 
 ## Quick start
@@ -34,13 +34,18 @@ go run ./examples/basic Nagi
 - Positional arguments, nested subcommands, aliases, and `--` termination
 - Raw byte strings, UTF-8 strings, signed 64-bit integers, finite values, and custom typed parsers
 - Source-aware option relations, four portable option-group rules, and typed Invocation validators
-- Structured deterministic Help, stable Usage Variants, custom sections and renderers, and `help [COMMAND...]`
-- Stable Diagnostic codes and categories with configurable rendering and exit-code mapping
+- Command-local value IDs, exact stable-ID scopes, and fallible required typed access
+- Structured deterministic Help, controllable subcommand Usage Variants, custom sections and renderers, and `help [COMMAND...]`
+- Stable Diagnostic codes, categories, value targets, and hints with configurable rendering and exit-code mapping
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
+- Parser-first dispatch and parsed-Invocation execution for command-by-command adoption
 - Process-free application tests through package `clitest`
 
 The shared [CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)
-define the observable contract and Rust parity
+define the observable contract and Rust parity. The
+[public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API.md)
+explains command-local scopes, Help presentation, structured validators, and
+staged adoption
 
 ## Testing applications
 
@@ -58,8 +63,9 @@ go test ./examples/basic
 | --- | --- |
 | [Basic command](examples/basic/README.md) | `go run ./examples/basic Nagi` |
 | [Nested subcommands](examples/subcommands/README.md) | `go run ./examples/subcommands start -vv` |
+| [Staged adoption](examples/staged/README.md) | `go run ./examples/staged inspect page` |
 
-Both examples are included in `go build ./...`
+All examples are included in `go build ./...`
 
 ## Limitations
 

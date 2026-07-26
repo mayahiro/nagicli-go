@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	cli "github.com/mayahiro/nagicli-go"
@@ -46,11 +48,75 @@ func TestParentOptionsAreNotRecognizedAfterChildSelection(t *testing.T) {
 	assertDiagnosticCode(t, err, cli.CodeUnknownOption)
 }
 
-func TestGraphValidationRejectsPathAndSiblingCollisions(t *testing.T) {
+func TestCommandLocalValueScopes(t *testing.T) {
+	var rootValue, childValue string
+	command := cli.NewCommand("root").
+		ID("root-id").
+		Option(cli.ValueOption("session").Long("session").Default("root")).
+		Validator(func(invocation *cli.Invocation) *cli.Diagnostic {
+			rootValue, _ = invocation.RawValue("session")
+			return nil
+		}).
+		Subcommand(
+			cli.NewCommand("run").
+				ID("run-id").
+				Option(cli.ValueOption("session").Long("session")).
+				Validator(func(invocation *cli.Invocation) *cli.Diagnostic {
+					childValue, _ = invocation.RawValue("session")
+					return nil
+				}),
+		)
+	result, err := command.Parse([]string{
+		"--session", "parent",
+		"run",
+		"--session", "child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := result.Invocation()
+	if rootValue != "parent" || childValue != "child" {
+		t.Fatalf("validator scopes = root:%q child:%q", rootValue, childValue)
+	}
+	if got, _ := invocation.RawValue("session"); got != "child" {
+		t.Fatalf("leaf lookup = %q", got)
+	}
+	root, ok := invocation.Scope("root-id")
+	if !ok {
+		t.Fatal("root scope was not found")
+	}
+	if got, _ := root.RawValue("session"); got != "parent" {
+		t.Fatalf("root scope lookup = %q", got)
+	}
+	child, ok := invocation.Scope("root-id", "run-id")
+	if !ok || !slices.Equal(child.CommandPath(), []string{"root", "run"}) {
+		t.Fatalf("child scope = %+v, %t", child, ok)
+	}
+	if value, accessErr := cli.RequireValueAs[string](child, "session"); accessErr != nil || value != "child" {
+		t.Fatalf("required child value = %q, %v", value, accessErr)
+	}
+	if _, accessErr := cli.RequireValueAs[int64](child, "session"); accessErr == nil ||
+		accessErr.Kind() != cli.ValueTypeMismatch {
+		t.Fatalf("type mismatch = %v", accessErr)
+	}
+
+	result, err = command.Parse([]string{"--session", "parent", "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := result.Invocation().RawValue("session"); present {
+		t.Fatal("an unresolved child declaration did not shadow the parent")
+	}
+	if len(result.Invocation().Scopes()) != 2 {
+		t.Fatalf("scope count = %d", len(result.Invocation().Scopes()))
+	}
+}
+
+func TestGraphValidationRejectsLocalAndSiblingCollisions(t *testing.T) {
 	tests := map[string]*cli.Command{
-		"path ID": cli.NewCommand("root").
+		"local value ID": cli.NewCommand("root").
 			Option(cli.Flag("same").Long("root-option")).
-			Subcommand(cli.NewCommand("child").Argument(cli.Positional("same"))),
+			Argument(cli.Positional("same")),
 		"sibling spelling": cli.NewCommand("root").
 			Subcommand(cli.NewCommand("first").Alias("shared")).
 			Subcommand(cli.NewCommand("shared")),
@@ -218,6 +284,64 @@ func TestHelpDocumentExposesStructuredAdditions(t *testing.T) {
 	}
 }
 
+func TestSubcommandUsagePresentationModes(t *testing.T) {
+	child := func() *cli.Command {
+		return cli.NewCommand("validate").
+			ID("validate-id").
+			UsageVariant("file", "--file <FILE>").
+			UsageVariant("stdin", "--stdin")
+	}
+	hidden := cli.NewCommand("root").
+		UsageVariant("direct", "<OLD> <NEW>").
+		SubcommandUsage(cli.SubcommandUsageHidden).
+		Subcommand(child())
+	document, err := hidden.HelpDocument([]string{"root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if variants := document.UsageVariants(); len(variants) != 1 ||
+		variants[0].ID != "direct" {
+		t.Fatalf("hidden variants = %+v", variants)
+	}
+
+	hiddenReservedID := cli.NewCommand("root").
+		UsageVariant("subcommand", "<VALUE>").
+		SubcommandUsage(cli.SubcommandUsageHidden).
+		Subcommand(child())
+	if err := hiddenReservedID.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	expanded := cli.NewCommand("root").
+		ID("root-id").
+		UsageVariant("direct", "<OLD> <NEW>").
+		SubcommandUsage(cli.SubcommandUsageExpanded).
+		Subcommand(child())
+	document, err = expanded.HelpDocument([]string{"root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	variants := document.UsageVariants()
+	if len(variants) != 3 ||
+		variants[1].CommandLine != "root validate --file <FILE>" ||
+		variants[2].CommandLine != "root validate --stdin" ||
+		!slices.Equal(variants[1].CommandIDPath, []string{"root-id", "validate-id"}) {
+		t.Fatalf("expanded variants = %+v", variants)
+	}
+
+	required := cli.NewCommand("root").
+		RequireSubcommand().
+		SubcommandUsage(cli.SubcommandUsageExpanded).
+		Subcommand(child())
+	document, err = required.HelpDocument([]string{"root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if variants := document.UsageVariants(); len(variants) != 2 {
+		t.Fatalf("required expanded variants = %+v", variants)
+	}
+}
+
 func TestUsageVariantsRemainHelpOnly(t *testing.T) {
 	generated, err := cli.NewCommand("root").HelpDocument([]string{"root"})
 	if err != nil {
@@ -248,15 +372,71 @@ func TestUsageVariantsRemainHelpOnly(t *testing.T) {
 	}
 }
 
-func TestGenericValidatorErrorBecomesUsageDiagnostic(t *testing.T) {
-	command := cli.NewCommand("root").Validator(func(*cli.Invocation) error {
-		return errors.New("rejected")
+func TestValidatorReturnsStructuredDiagnostic(t *testing.T) {
+	command := cli.NewCommand("root").Validator(func(*cli.Invocation) *cli.Diagnostic {
+		return cli.NewDiagnostic(cli.DiagnosticCode("selection-required"), "rejected").
+			WithCategory(cli.CategoryUsage).
+			WithTarget(cli.OptionTarget("selection")).
+			WithHint("choose one selection")
 	})
 	_, err := command.Parse(nil)
-	assertDiagnosticCode(t, err, cli.CodeValidation)
 	var diagnostic *cli.Diagnostic
 	if !errors.As(err, &diagnostic) || diagnostic.Category() != cli.CategoryUsage {
 		t.Fatalf("diagnostic = %v", err)
+	}
+	if diagnostic.Code() != "selection-required" ||
+		len(diagnostic.Targets()) != 1 ||
+		len(diagnostic.Hints()) != 1 ||
+		!slices.Equal(diagnostic.Targets()[0].CommandIDPath(), []string{"root"}) {
+		t.Fatalf("structured diagnostic = %+v", diagnostic)
+	}
+	if rendered := diagnostic.Render(); !strings.Contains(rendered, "hint: choose one selection\n") {
+		t.Fatalf("rendered diagnostic = %q", rendered)
+	}
+}
+
+func TestParserAndRuntimeCanBeAdoptedInStages(t *testing.T) {
+	command := cli.NewCommand("root").
+		Argument(cli.Positional("value")).
+		Handle(func(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, error) {
+			value, _ := invocation.RawValue("value")
+			_, err := context.Stdout().Write([]byte(value))
+			return cli.Success(), err
+		})
+	result, err := command.Parse([]string{"ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout := &bytes.Buffer{}
+	context := cli.NewContext(&bytes.Buffer{}, stdout, &bytes.Buffer{}, nil, "/")
+	outcome, err := command.RunParsed(context, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Status() != cli.StatusSuccess || stdout.String() != "ready" {
+		t.Fatalf("staged outcome = %d, %q", outcome.Status(), stdout.String())
+	}
+
+	diagnostic := cli.NewDiagnostic(cli.DiagnosticCode("selection-required"), "rejected").
+		WithCategory(cli.CategoryUsage).
+		WithHint("choose one")
+	policy := cli.DefaultRuntimePolicy().WithExitCodePolicy(
+		cli.DefaultExitCodePolicy().WithStatus(cli.CategoryUsage, 1),
+	)
+	if policy.StatusForDiagnostic(diagnostic) != 1 ||
+		!strings.Contains(policy.RenderDiagnostic(diagnostic), "hint: choose one\n") {
+		t.Fatal("parser-only policy helpers did not preserve rendering and status")
+	}
+
+	foreignResult, err := cli.NewCommand("root").ID("foreign-root").Parse(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := command.RunParsed(context, foreignResult); err == nil {
+		t.Fatal("foreign ParseResult was accepted")
+	}
+	if _, err := command.RunInvocation(context, foreignResult.Invocation()); err == nil {
+		t.Fatal("foreign Invocation was accepted")
 	}
 }
 

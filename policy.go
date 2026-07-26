@@ -97,6 +97,9 @@ func (r PlainDiagnosticRenderer) WithUsage(show bool) PlainDiagnosticRenderer {
 // RenderDiagnostic renders the configured plain format
 func (r PlainDiagnosticRenderer) RenderDiagnostic(diagnostic *Diagnostic) string {
 	result := fmt.Sprintf("%s[%s]: %s\n", r.prefix, diagnostic.code, diagnostic.message)
+	for _, hint := range diagnostic.hints {
+		result += "hint: " + hint + "\n"
+	}
 	if r.showUsage && diagnostic.usage != "" {
 		result += "usage: " + diagnostic.usage + "\n"
 	}
@@ -135,6 +138,26 @@ func (p RuntimePolicy) WithHelpRenderer(renderer HelpRenderer) RuntimePolicy {
 func (p RuntimePolicy) WithDiagnosticRenderer(renderer DiagnosticRenderer) RuntimePolicy {
 	p.diagnosticRenderer = renderer
 	return p
+}
+
+// ExitCodePolicy returns the configured category-to-status mapping
+func (p RuntimePolicy) ExitCodePolicy() ExitCodePolicy {
+	return p.normalized().exitCodes
+}
+
+// RenderHelp renders one Help Document without writing to process output
+func (p RuntimePolicy) RenderHelp(document HelpDocument) string {
+	return p.normalized().helpRenderer.RenderHelp(document)
+}
+
+// RenderDiagnostic renders one Diagnostic without writing to process output
+func (p RuntimePolicy) RenderDiagnostic(diagnostic *Diagnostic) string {
+	return p.normalized().diagnosticRenderer.RenderDiagnostic(diagnostic)
+}
+
+// StatusForDiagnostic returns the configured process status for one Diagnostic
+func (p RuntimePolicy) StatusForDiagnostic(diagnostic *Diagnostic) ExitStatus {
+	return p.normalized().exitCodes.StatusFor(diagnostic.Category())
 }
 
 func (p RuntimePolicy) normalized() RuntimePolicy {

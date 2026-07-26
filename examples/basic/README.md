@@ -1,7 +1,8 @@
 # Basic command
 
-This example defines one required String positional value, writes through the
-injected Context, and returns an explicit Exit Status
+This example defines one required String positional value, retrieves it with
+the fallible required typed accessor, writes through the injected Context, and
+returns an explicit Exit Status
 
 Run it from the Go repository root:
 

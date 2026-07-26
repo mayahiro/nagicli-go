@@ -1,4 +1,16 @@
-// Package cli provides a validated command graph, structured Help with
-// Help-only Usage Variants, Diagnostics, typed Invocation validation, and an
-// injected policy-controlled runtime for native Go command applications.
+// Package cli provides a validated command graph, scoped typed Invocations,
+// structured Help and Diagnostics, and an injected policy-controlled runtime
+// for native Go command applications.
+//
+// Parent and child Commands may reuse local value IDs. Invocation access starts
+// at a documented current scope, while Scope selects one exact stable command-ID
+// path. RequireValueAs provides fallible schema-required typed access.
+//
+// Help-only Usage Variants and SubcommandUsage control presentation without
+// changing parsing. InvocationValidator returns a structured Diagnostic with
+// application codes, option or argument targets, and remediation hints.
+//
+// Parse, RunParsedWithPolicy, RunInvocationWithPolicy, and RuntimePolicy's pure
+// rendering and status helpers support command-by-command adoption in an
+// existing CLI. RunProcess remains the complete process integration.
 package cli

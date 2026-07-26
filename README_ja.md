@@ -14,7 +14,7 @@ Helpのterminal Cell幅計算にNagi Textを使用し、Nagi SurfaceとNagi TUI�
 ## 導入
 
 ```sh
-go get github.com/mayahiro/nagicli-go@v0.3.1
+go get github.com/mayahiro/nagicli-go@v0.3.2
 ```
 
 ## Quick start
@@ -31,12 +31,16 @@ go run ./examples/basic Nagi
 - Positional argument、nested subcommand、alias、`--` terminator
 - Raw byte string、UTF-8 string、signed 64-bit integer、finite value、custom typed parser
 - Source-aware option relation、4種類のportable option-group rule、typed Invocation validator
-- Structured deterministic Help、stable Usage Variant、custom sectionとrenderer、`help [COMMAND...]`
-- 安定Diagnostic codeとcategory、設定可能なrenderingとexit-code mapping
+- Command-local value ID、stable IDによるexact scope、失敗理由を返すrequired typed access
+- Structured deterministic Help、制御可能なsubcommand Usage Variant、custom sectionとrenderer、`help [COMMAND...]`
+- 安定Diagnostic code、category、value target、hint、設定可能なrenderingとexit-code mapping
 - 注入可能なstdin、stdout、stderr、environment、current directory、`context.Context` cancellation
+- Command単位の段階導入に使うparser-first dispatchとparsed Invocation実行
 - `clitest` packageによるprocessなしのapplication test
 
 共有[CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)が観測可能な契約とRust parityを定義します
+
+[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)ではcommand-local scope、Help presentation、structured validator、段階導入を説明します
 
 ## Application test
 
@@ -52,8 +56,9 @@ go test ./examples/basic
 | --- | --- |
 | [Basic command](examples/basic/README.md) | `go run ./examples/basic Nagi` |
 | [Nested subcommands](examples/subcommands/README.md) | `go run ./examples/subcommands start -vv` |
+| [段階導入](examples/staged/README.md) | `go run ./examples/staged inspect page` |
 
-両exampleは`go build ./...`の対象です
+全exampleは`go build ./...`の対象です
 
 ## 制約
 

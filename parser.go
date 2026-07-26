@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -17,10 +16,34 @@ type invocationValue struct {
 	supplied bool
 }
 
-// Invocation is one canonical parsed command path and its typed values
-type Invocation struct {
-	commandPath []string
+type invocationDefinition struct {
+	kind     OptionKind
+	repeated bool
+}
+
+type invocationScopeData struct {
+	definitions map[string]invocationDefinition
 	values      map[string]invocationValue
+}
+
+// InvocationScope is one exact command-local value scope
+type InvocationScope struct {
+	invocation *Invocation
+	index      int
+}
+
+// Invocation is one canonical parsed command path and its command-local typed
+// value scopes
+//
+// Unqualified access starts at the current scope and searches ancestors. The
+// nearest declaration shadows an ancestor even when it has no resolved value.
+// Validators temporarily use their defining Command as current; handlers and
+// returned Invocations use the selected leaf
+type Invocation struct {
+	commandPath   []string
+	commandIDPath []string
+	scopes        []invocationScopeData
+	currentScope  int
 }
 
 // CommandPath returns a copy of the canonical root-to-leaf path
@@ -28,48 +51,87 @@ func (i *Invocation) CommandPath() []string {
 	return append([]string(nil), i.commandPath...)
 }
 
-// Contains reports whether an ID has a value
+// CommandIDPath returns a copy of the stable root-to-leaf command-ID path
+func (i *Invocation) CommandIDPath() []string {
+	return append([]string(nil), i.commandIDPath...)
+}
+
+// ValueScopeIDPath returns the current stable path where unqualified lookup
+// starts
+func (i *Invocation) ValueScopeIDPath() []string {
+	return append([]string(nil), i.commandIDPath[:i.currentScope+1]...)
+}
+
+// CurrentScope returns the exact scope where unqualified lookup starts
+func (i *Invocation) CurrentScope() InvocationScope {
+	return InvocationScope{invocation: i, index: i.currentScope}
+}
+
+// Scope returns an exact local scope selected by stable command-ID path
+func (i *Invocation) Scope(commandIDPath ...string) (InvocationScope, bool) {
+	for index := range i.scopes {
+		if equalPath(i.commandIDPath[:index+1], commandIDPath) {
+			return InvocationScope{invocation: i, index: index}, true
+		}
+	}
+	return InvocationScope{}, false
+}
+
+// Scopes returns exact command scopes in root-to-leaf order
+func (i *Invocation) Scopes() []InvocationScope {
+	scopes := make([]InvocationScope, len(i.scopes))
+	for index := range i.scopes {
+		scopes[index] = InvocationScope{invocation: i, index: index}
+	}
+	return scopes
+}
+
+// Contains reports whether the nearest visible declaration has a value
 func (i *Invocation) Contains(id string) bool {
-	_, ok := i.values[id]
-	return ok
+	_, _, _, present := i.lookup(id)
+	return present
 }
 
-// Supplied reports whether an ID was present in argv
+// Supplied reports whether the nearest visible declaration was present in argv
 func (i *Invocation) Supplied(id string) bool {
-	value, ok := i.values[id]
-	return ok && value.supplied
+	_, value, _, present := i.lookup(id)
+	return present && value.supplied
 }
 
-// Flag returns Boolean presence when the ID denotes a flag
+// Flag returns Boolean presence for the nearest visible flag declaration
 func (i *Invocation) Flag(id string) (bool, bool) {
-	value, ok := i.values[id]
-	if !ok || value.kind != OptionFlag {
+	definition, value, declared, present := i.lookup(id)
+	if !declared || !present || definition.kind != OptionFlag {
 		return false, false
 	}
 	return value.flag, true
 }
 
-// Count returns occurrences when the ID denotes a count option
+// Count returns occurrences for the nearest visible count declaration
 func (i *Invocation) Count(id string) (uint64, bool) {
-	value, ok := i.values[id]
-	if !ok || value.kind != OptionCount {
+	definition, value, declared, present := i.lookup(id)
+	if !declared || !present || definition.kind != OptionCount {
 		return 0, false
 	}
 	return value.count, true
 }
 
-// ParsedValues returns a copy of all values and sources for an ID
+// ParsedValues returns values for the nearest visible Value declaration
 func (i *Invocation) ParsedValues(id string) []ParsedValue {
-	value, ok := i.values[id]
-	if !ok || value.kind != OptionValue {
+	return append([]ParsedValue(nil), i.parsedValuesForLookup(id)...)
+}
+
+func (i *Invocation) parsedValuesForLookup(id string) []ParsedValue {
+	definition, value, declared, present := i.lookup(id)
+	if !declared || !present || definition.kind != OptionValue {
 		return nil
 	}
-	return append([]ParsedValue(nil), value.values...)
+	return value.values
 }
 
 // RawValue returns the first raw value
 func (i *Invocation) RawValue(id string) (string, bool) {
-	values := i.ParsedValues(id)
+	values := i.parsedValuesForLookup(id)
 	if len(values) == 0 {
 		return "", false
 	}
@@ -78,18 +140,163 @@ func (i *Invocation) RawValue(id string) (string, bool) {
 
 // IsRepeated reports whether a value ID was declared as repeatable
 func (i *Invocation) IsRepeated(id string) bool {
-	value, ok := i.values[id]
-	return ok && value.kind == OptionValue && value.repeated
+	definition, _, declared, _ := i.lookup(id)
+	return declared && definition.kind == OptionValue && definition.repeated
 }
 
-// ValueIDs returns sorted IDs that have a value
+// ValueIDs returns sorted visible IDs that have a value
 func (i *Invocation) ValueIDs() []string {
-	ids := make([]string, 0, len(i.values))
-	for id := range i.values {
+	seen := map[string]struct{}{}
+	var ids []string
+	for index := i.currentScope; index >= 0; index-- {
+		scope := &i.scopes[index]
+		for id := range scope.definitions {
+			if _, hidden := seen[id]; hidden {
+				continue
+			}
+			seen[id] = struct{}{}
+			if _, present := scope.values[id]; present {
+				ids = append(ids, id)
+			}
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (i *Invocation) lookup(id string) (invocationDefinition, invocationValue, bool, bool) {
+	for index := i.currentScope; index >= 0; index-- {
+		scope := &i.scopes[index]
+		definition, declared := scope.definitions[id]
+		if !declared {
+			continue
+		}
+		value, present := scope.values[id]
+		return definition, value, true, present
+	}
+	return invocationDefinition{}, invocationValue{}, false, false
+}
+
+// CommandPath returns the canonical path prefix for this exact scope
+func (s InvocationScope) CommandPath() []string {
+	if !s.valid() {
+		return nil
+	}
+	return append([]string(nil), s.invocation.commandPath[:s.index+1]...)
+}
+
+// CommandIDPath returns the stable command-ID path for this exact scope
+func (s InvocationScope) CommandIDPath() []string {
+	if !s.valid() {
+		return nil
+	}
+	return append([]string(nil), s.invocation.commandIDPath[:s.index+1]...)
+}
+
+// ValueScopeIDPath returns the stable path used by this exact value scope
+func (s InvocationScope) ValueScopeIDPath() []string {
+	return s.CommandIDPath()
+}
+
+// Contains reports whether one local declaration has a value
+func (s InvocationScope) Contains(id string) bool {
+	_, _, _, present := s.lookup(id)
+	return present
+}
+
+// Supplied reports whether one local declaration was present in argv
+func (s InvocationScope) Supplied(id string) bool {
+	_, value, _, present := s.lookup(id)
+	return present && value.supplied
+}
+
+// Flag returns Boolean presence for one local flag declaration
+func (s InvocationScope) Flag(id string) (bool, bool) {
+	definition, value, declared, present := s.lookup(id)
+	if !declared || !present || definition.kind != OptionFlag {
+		return false, false
+	}
+	return value.flag, true
+}
+
+// Count returns occurrences for one local count declaration
+func (s InvocationScope) Count(id string) (uint64, bool) {
+	definition, value, declared, present := s.lookup(id)
+	if !declared || !present || definition.kind != OptionCount {
+		return 0, false
+	}
+	return value.count, true
+}
+
+// ParsedValues returns a copy of local parsed values and sources
+func (s InvocationScope) ParsedValues(id string) []ParsedValue {
+	return append([]ParsedValue(nil), s.parsedValuesForLookup(id)...)
+}
+
+func (s InvocationScope) parsedValuesForLookup(id string) []ParsedValue {
+	definition, value, declared, present := s.lookup(id)
+	if !declared || !present || definition.kind != OptionValue {
+		return nil
+	}
+	return value.values
+}
+
+// RawValue returns the first local raw value
+func (s InvocationScope) RawValue(id string) (string, bool) {
+	values := s.parsedValuesForLookup(id)
+	if len(values) == 0 {
+		return "", false
+	}
+	return values[0].raw, true
+}
+
+// IsRepeated reports whether a local Value declaration is repeatable
+func (s InvocationScope) IsRepeated(id string) bool {
+	definition, _, declared, _ := s.lookup(id)
+	return declared && definition.kind == OptionValue && definition.repeated
+}
+
+// ValueIDs returns sorted local IDs that have a value
+func (s InvocationScope) ValueIDs() []string {
+	if !s.valid() {
+		return nil
+	}
+	scope := &s.invocation.scopes[s.index]
+	ids := make([]string, 0, len(scope.values))
+	for id := range scope.values {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func (s InvocationScope) valid() bool {
+	return s.invocation != nil && s.index >= 0 && s.index < len(s.invocation.scopes)
+}
+
+func (s InvocationScope) lookup(id string) (invocationDefinition, invocationValue, bool, bool) {
+	if !s.valid() {
+		return invocationDefinition{}, invocationValue{}, false, false
+	}
+	scope := &s.invocation.scopes[s.index]
+	definition, declared := scope.definitions[id]
+	if !declared {
+		return invocationDefinition{}, invocationValue{}, false, false
+	}
+	value, present := scope.values[id]
+	return definition, value, true, present
+}
+
+func equalPath(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // ParseResultKind distinguishes invocation, help, and version actions
@@ -106,10 +313,11 @@ const (
 
 // ParseResult is the result of argv parsing before handler execution
 type ParseResult struct {
-	kind        ParseResultKind
-	invocation  *Invocation
-	commandPath []string
-	version     string
+	kind          ParseResultKind
+	invocation    *Invocation
+	commandPath   []string
+	commandIDPath []string
+	version       string
 }
 
 // Kind returns the parse result category
@@ -118,9 +326,20 @@ func (r ParseResult) Kind() ParseResultKind { return r.kind }
 // Invocation returns the validated invocation when Kind is ParseInvocation
 func (r ParseResult) Invocation() *Invocation { return r.invocation }
 
-// CommandPath returns the help target when Kind is ParseHelp
+// CommandPath returns the selected canonical command path
 func (r ParseResult) CommandPath() []string {
+	if r.invocation != nil {
+		return r.invocation.CommandPath()
+	}
 	return append([]string(nil), r.commandPath...)
+}
+
+// CommandIDPath returns the selected stable command-ID path
+func (r ParseResult) CommandIDPath() []string {
+	if r.invocation != nil {
+		return r.invocation.CommandIDPath()
+	}
+	return append([]string(nil), r.commandIDPath...)
 }
 
 // Version returns the configured version when Kind is ParseVersion
@@ -146,7 +365,7 @@ func (c *Command) ParseWithEnvironment(arguments []string, environment map[strin
 		environment:    copyEnvironment,
 		commands:       []*Command{c},
 		commandPath:    []string{c.name},
-		values:         map[string]invocationValue{},
+		scopes:         []invocationScopeData{newInvocationScopeData(c)},
 		optionsEnabled: true,
 	}
 	return parser.parse()
@@ -159,7 +378,7 @@ type argumentParser struct {
 	index             int
 	commands          []*Command
 	commandPath       []string
-	values            map[string]invocationValue
+	scopes            []invocationScopeData
 	positionalIndex   int
 	positionalStarted bool
 	optionsEnabled    bool
@@ -201,8 +420,13 @@ func (p *argumentParser) parse() (ParseResult, error) {
 		return ParseResult{}, err
 	}
 	invocation := &Invocation{
-		commandPath: append([]string(nil), p.commandPath...),
-		values:      p.values,
+		commandPath:   append([]string(nil), p.commandPath...),
+		commandIDPath: make([]string, len(p.commands)),
+		scopes:        p.scopes,
+		currentScope:  len(p.scopes) - 1,
+	}
+	for index, command := range p.commands {
+		invocation.commandIDPath[index] = command.id
 	}
 	if err := p.runValidators(invocation); err != nil {
 		return ParseResult{}, err
@@ -215,12 +439,47 @@ func (p *argumentParser) parse() (ParseResult, error) {
 
 func (p *argumentParser) active() *Command { return p.commands[len(p.commands)-1] }
 
+func (p *argumentParser) activeScope() *invocationScopeData {
+	return &p.scopes[len(p.scopes)-1]
+}
+
+func (p *argumentParser) currentCommandIDPath() []string {
+	path := make([]string, len(p.commands))
+	for index, command := range p.commands {
+		path[index] = command.id
+	}
+	return path
+}
+
+func newInvocationScopeData(command *Command) invocationScopeData {
+	scope := invocationScopeData{
+		definitions: make(map[string]invocationDefinition, len(command.options)+len(command.arguments)),
+		values:      map[string]invocationValue{},
+	}
+	for index := range command.options {
+		option := &command.options[index]
+		scope.definitions[option.id] = invocationDefinition{
+			kind:     option.kind,
+			repeated: option.repeated,
+		}
+	}
+	for index := range command.arguments {
+		argument := &command.arguments[index]
+		scope.definitions[argument.id] = invocationDefinition{
+			kind:     OptionValue,
+			repeated: argument.repeated,
+		}
+	}
+	return scope
+}
+
 func (p *argumentParser) parseHelpCommand() (ParseResult, bool, error) {
 	if len(p.arguments) == 0 || p.arguments[0] != "help" {
 		return ParseResult{}, false, nil
 	}
 	command := p.root
 	path := []string{p.root.name}
+	idPath := []string{p.root.id}
 	for _, target := range p.arguments[1:] {
 		var selected *Command
 		for _, child := range command.subcommands {
@@ -244,8 +503,13 @@ func (p *argumentParser) parseHelpCommand() (ParseResult, bool, error) {
 		}
 		command = selected
 		path = append(path, command.name)
+		idPath = append(idPath, command.id)
 	}
-	return ParseResult{kind: ParseHelp, commandPath: path}, true, nil
+	return ParseResult{
+		kind:          ParseHelp,
+		commandPath:   path,
+		commandIDPath: idPath,
+	}, true, nil
 }
 
 func (p *argumentParser) parseLong(argument string) (ParseResult, bool, error) {
@@ -255,13 +519,22 @@ func (p *argumentParser) parseLong(argument string) (ParseResult, bool, error) {
 		if hasAttached {
 			return ParseResult{}, false, p.diag(CodeUnexpectedOptionValue, "option '--help' does not take a value")
 		}
-		return ParseResult{kind: ParseHelp, commandPath: append([]string(nil), p.commandPath...)}, true, nil
+		return ParseResult{
+			kind:          ParseHelp,
+			commandPath:   append([]string(nil), p.commandPath...),
+			commandIDPath: p.currentCommandIDPath(),
+		}, true, nil
 	}
 	if name == "version" && p.root.version != "" {
 		if hasAttached {
 			return ParseResult{}, false, p.diag(CodeUnexpectedOptionValue, "option '--version' does not take a value")
 		}
-		return ParseResult{kind: ParseVersion, version: p.root.version}, true, nil
+		return ParseResult{
+			kind:          ParseVersion,
+			commandPath:   []string{p.root.name},
+			commandIDPath: []string{p.root.id},
+			version:       p.root.version,
+		}, true, nil
 	}
 	var option *OptionSpec
 	for index := range p.active().options {
@@ -293,10 +566,19 @@ func (p *argumentParser) parseShort(argument string) (ParseResult, bool, error) 
 			return ParseResult{}, false, p.diag(CodeUnknownOption, "unknown option "+quoteValue(argument))
 		}
 		if short == 'h' {
-			return ParseResult{kind: ParseHelp, commandPath: append([]string(nil), p.commandPath...)}, true, nil
+			return ParseResult{
+				kind:          ParseHelp,
+				commandPath:   append([]string(nil), p.commandPath...),
+				commandIDPath: p.currentCommandIDPath(),
+			}, true, nil
 		}
 		if short == 'V' && p.root.version != "" {
-			return ParseResult{kind: ParseVersion, version: p.root.version}, true, nil
+			return ParseResult{
+				kind:          ParseVersion,
+				commandPath:   []string{p.root.name},
+				commandIDPath: []string{p.root.id},
+				version:       p.root.version,
+			}, true, nil
 		}
 		var option *OptionSpec
 		for index := range p.active().options {
@@ -328,45 +610,72 @@ func (p *argumentParser) parseShort(argument string) (ParseResult, bool, error) 
 }
 
 func (p *argumentParser) applyOption(option *OptionSpec, attached *string) error {
+	values := p.activeScope().values
 	switch option.kind {
 	case OptionFlag:
 		if attached != nil {
-			return p.diag(CodeUnexpectedOptionValue, fmt.Sprintf("option %q does not take a value", optionDisplay(option)))
+			return p.diagTargets(
+				CodeUnexpectedOptionValue,
+				fmt.Sprintf("option %q does not take a value", optionDisplay(option)),
+				OptionTarget(option.id),
+			)
 		}
-		if _, duplicate := p.values[option.id]; duplicate {
-			return p.diag(CodeDuplicateOption, fmt.Sprintf("option %q was provided more than once", optionDisplay(option)))
+		if _, duplicate := values[option.id]; duplicate {
+			return p.diagTargets(
+				CodeDuplicateOption,
+				fmt.Sprintf("option %q was provided more than once", optionDisplay(option)),
+				OptionTarget(option.id),
+			)
 		}
-		p.values[option.id] = invocationValue{kind: OptionFlag, flag: true, supplied: true}
+		values[option.id] = invocationValue{kind: OptionFlag, flag: true, supplied: true}
 	case OptionCount:
 		if attached != nil {
-			return p.diag(CodeUnexpectedOptionValue, fmt.Sprintf("option %q does not take a value", optionDisplay(option)))
+			return p.diagTargets(
+				CodeUnexpectedOptionValue,
+				fmt.Sprintf("option %q does not take a value", optionDisplay(option)),
+				OptionTarget(option.id),
+			)
 		}
-		value := p.values[option.id]
+		value := values[option.id]
 		value.kind = OptionCount
 		value.supplied = true
 		if value.count != math.MaxUint64 {
 			value.count++
 		}
-		p.values[option.id] = value
+		values[option.id] = value
 	case OptionValue:
 		var raw string
 		if attached != nil {
 			raw = *attached
 		} else {
 			if p.index >= len(p.arguments) {
-				return p.diag(CodeMissingOptionValue, fmt.Sprintf("option %q requires a value", optionDisplay(option)))
+				return p.diagTargets(
+					CodeMissingOptionValue,
+					fmt.Sprintf("option %q requires a value", optionDisplay(option)),
+					OptionTarget(option.id),
+				)
 			}
 			raw = p.arguments[p.index]
 			p.index++
 		}
-		if _, duplicate := p.values[option.id]; duplicate && !option.repeated {
-			return p.diag(CodeDuplicateOption, fmt.Sprintf("option %q was provided more than once", optionDisplay(option)))
+		if _, duplicate := values[option.id]; duplicate && !option.repeated {
+			return p.diagTargets(
+				CodeDuplicateOption,
+				fmt.Sprintf("option %q was provided more than once", optionDisplay(option)),
+				OptionTarget(option.id),
+			)
 		}
-		value, err := p.parseValue(option.id, option.parser, raw, SourceCommandLine)
+		value, err := p.parseValue(
+			option.id,
+			option.parser,
+			raw,
+			SourceCommandLine,
+			OptionTarget(option.id),
+		)
 		if err != nil {
 			return err
 		}
-		p.pushValue(option.id, value, option.repeated)
+		p.pushValue(len(p.scopes)-1, option.id, value, option.repeated)
 	}
 	return nil
 }
@@ -376,6 +685,7 @@ func (p *argumentParser) selectSubcommand(argument string) bool {
 		if command.name == argument {
 			p.commands = append(p.commands, command)
 			p.commandPath = append(p.commandPath, command.name)
+			p.scopes = append(p.scopes, newInvocationScopeData(command))
 			p.positionalIndex = 0
 			p.positionalStarted = false
 			return true
@@ -384,6 +694,7 @@ func (p *argumentParser) selectSubcommand(argument string) bool {
 			if alias == argument {
 				p.commands = append(p.commands, command)
 				p.commandPath = append(p.commandPath, command.name)
+				p.scopes = append(p.scopes, newInvocationScopeData(command))
 				p.positionalIndex = 0
 				p.positionalStarted = false
 				return true
@@ -403,11 +714,17 @@ func (p *argumentParser) parsePositional(raw string) error {
 	}
 	argument := &command.arguments[p.positionalIndex]
 	p.positionalStarted = true
-	value, err := p.parseValue(argument.id, argument.parser, raw, SourceCommandLine)
+	value, err := p.parseValue(
+		argument.id,
+		argument.parser,
+		raw,
+		SourceCommandLine,
+		ArgumentTarget(argument.id),
+	)
 	if err != nil {
 		return err
 	}
-	p.pushValue(argument.id, value, argument.repeated)
+	p.pushValue(len(p.scopes)-1, argument.id, value, argument.repeated)
 	if !argument.repeated {
 		p.positionalIndex++
 	}
@@ -415,13 +732,14 @@ func (p *argumentParser) parsePositional(raw string) error {
 }
 
 func (p *argumentParser) resolveFallbacks() error {
-	for _, command := range p.commands {
+	for commandIndex, command := range p.commands {
+		values := p.scopes[commandIndex].values
 		for index := range command.options {
 			option := &command.options[index]
 			if option.kind != OptionValue {
 				continue
 			}
-			if _, present := p.values[option.id]; present {
+			if _, present := values[option.id]; present {
 				continue
 			}
 			raw, source, present := "", SourceDefault, false
@@ -437,11 +755,17 @@ func (p *argumentParser) resolveFallbacks() error {
 			if !present {
 				continue
 			}
-			value, err := p.parseValue(option.id, option.parser, raw, source)
+			value, err := p.parseValue(
+				option.id,
+				option.parser,
+				raw,
+				source,
+				OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+			)
 			if err != nil {
 				return err
 			}
-			p.pushValue(option.id, value, option.repeated)
+			p.pushValue(commandIndex, option.id, value, option.repeated)
 		}
 	}
 	return nil
@@ -449,40 +773,61 @@ func (p *argumentParser) resolveFallbacks() error {
 
 func (p *argumentParser) validateValues() error {
 	for commandIndex, command := range p.commands {
+		values := p.scopes[commandIndex].values
 		if command.subcommandRequired && commandIndex+1 == len(p.commands) {
 			return p.diag(CodeMissingSubcommand, fmt.Sprintf("command %q requires a subcommand", command.name))
 		}
 		for index := range command.options {
 			option := &command.options[index]
-			_, present := p.values[option.id]
+			_, present := values[option.id]
 			if option.required && !present {
-				return p.diag(CodeMissingRequired, fmt.Sprintf("required option %q is missing", optionDisplay(option)))
+				return p.diagTargets(
+					CodeMissingRequired,
+					fmt.Sprintf("required option %q is missing", optionDisplay(option)),
+					OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+				)
 			}
 			if !present {
 				continue
 			}
 			for _, required := range option.requires {
-				if p.present(option.id, required.presence) && !p.present(required.id, required.presence) {
-					return p.diag(CodeRequires, fmt.Sprintf("option %q requires %q", optionDisplay(option), required.id))
+				if p.present(commandIndex, option.id, required.presence) &&
+					!p.present(commandIndex, required.id, required.presence) {
+					return p.diagTargets(
+						CodeRequires,
+						fmt.Sprintf("option %q requires %q", optionDisplay(option), required.id),
+						OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+						OptionTarget(required.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+					)
 				}
 			}
 			for _, conflict := range option.conflicts {
-				if p.present(option.id, conflict.presence) && p.present(conflict.id, conflict.presence) {
-					return p.diag(CodeConflicts, fmt.Sprintf("option %q conflicts with %q", optionDisplay(option), conflict.id))
+				if p.present(commandIndex, option.id, conflict.presence) &&
+					p.present(commandIndex, conflict.id, conflict.presence) {
+					return p.diagTargets(
+						CodeConflicts,
+						fmt.Sprintf("option %q conflicts with %q", optionDisplay(option), conflict.id),
+						OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+						OptionTarget(conflict.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+					)
 				}
 			}
 		}
 		for index := range command.arguments {
 			argument := &command.arguments[index]
-			if _, present := p.values[argument.id]; argument.required && !present {
-				return p.diag(CodeMissingRequired, fmt.Sprintf("required argument %q is missing", argument.id))
+			if _, present := values[argument.id]; argument.required && !present {
+				return p.diagTargets(
+					CodeMissingRequired,
+					fmt.Sprintf("required argument %q is missing", argument.id),
+					ArgumentTarget(argument.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+				)
 			}
 		}
 		for index := range command.optionGroups {
 			group := &command.optionGroups[index]
 			count := 0
 			for _, id := range group.options {
-				if p.present(id, group.presence) {
+				if p.present(commandIndex, id, group.presence) {
 					count++
 				}
 			}
@@ -498,9 +843,17 @@ func (p *argumentParser) validateValues() error {
 				valid = count == 0 || count == len(group.options)
 			}
 			if !valid {
-				return p.diag(
+				targets := make([]DiagnosticTarget, 0, len(group.options))
+				for _, id := range group.options {
+					targets = append(
+						targets,
+						OptionTarget(id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+					)
+				}
+				return p.diagTargets(
 					CodeOptionGroup,
 					fmt.Sprintf("option group %q is not satisfied", group.id),
+					targets...,
 				)
 			}
 		}
@@ -508,8 +861,8 @@ func (p *argumentParser) validateValues() error {
 	return nil
 }
 
-func (p *argumentParser) present(id string, basis PresenceBasis) bool {
-	value, ok := p.values[id]
+func (p *argumentParser) present(scopeIndex int, id string, basis PresenceBasis) bool {
+	value, ok := p.scopes[scopeIndex].values[id]
 	if !ok {
 		return false
 	}
@@ -517,41 +870,75 @@ func (p *argumentParser) present(id string, basis PresenceBasis) bool {
 }
 
 func (p *argumentParser) runValidators(invocation *Invocation) error {
-	for _, command := range p.commands {
+	defer func() {
+		invocation.currentScope = len(invocation.scopes) - 1
+	}()
+	for commandIndex, command := range p.commands {
+		invocation.currentScope = commandIndex
 		for _, validator := range command.validators {
-			err := validator(invocation)
-			if err == nil {
+			diagnostic := validator(invocation)
+			if diagnostic == nil {
 				continue
 			}
-			var diagnostic *Diagnostic
-			if !errors.As(err, &diagnostic) {
-				diagnostic = NewDiagnostic(CodeValidation, err.Error())
-			}
-			return diagnostic.withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
+			return diagnostic.
+				withDefaultTargetPath(invocation.commandIDPath[:commandIndex+1]).
+				withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
 		}
 	}
 	return nil
 }
 
-func (p *argumentParser) parseValue(id string, parser ValueParser, raw string, source ValueSource) (ParsedValue, error) {
+func (p *argumentParser) parseValue(
+	id string,
+	parser ValueParser,
+	raw string,
+	source ValueSource,
+	target DiagnosticTarget,
+) (ParsedValue, error) {
 	typed, err := parser.Parse(raw)
 	if err != nil {
-		return ParsedValue{}, p.diag(CodeInvalidValue, fmt.Sprintf("invalid value %s for %q: %s", quoteValue(raw), id, err))
+		return ParsedValue{}, p.diagTargets(
+			CodeInvalidValue,
+			fmt.Sprintf("invalid value %s for %q: %s", quoteValue(raw), id, err),
+			target,
+		)
 	}
 	return ParsedValue{raw: raw, source: source, typed: typed}, nil
 }
 
-func (p *argumentParser) pushValue(id string, parsed ParsedValue, repeated bool) {
-	value := p.values[id]
+func (p *argumentParser) pushValue(scopeIndex int, id string, parsed ParsedValue, repeated bool) {
+	value := p.scopes[scopeIndex].values[id]
 	value.kind = OptionValue
 	value.repeated = repeated
 	if parsed.Source() == SourceCommandLine {
 		value.supplied = true
 	}
 	value.values = append(value.values, parsed)
-	p.values[id] = value
+	p.scopes[scopeIndex].values[id] = value
 }
 
-func (p *argumentParser) diag(code DiagnosticCode, message string) error {
-	return NewDiagnostic(code, message).withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
+func (p *argumentParser) commandIDPath(index int) []string {
+	path := make([]string, index+1)
+	for commandIndex := range path {
+		path[commandIndex] = p.commands[commandIndex].id
+	}
+	return path
+}
+
+func (p *argumentParser) diag(code DiagnosticCode, message string) *Diagnostic {
+	return p.diagTargets(code, message)
+}
+
+func (p *argumentParser) diagTargets(
+	code DiagnosticCode,
+	message string,
+	targets ...DiagnosticTarget,
+) *Diagnostic {
+	diagnostic := NewDiagnostic(code, message)
+	for _, target := range targets {
+		diagnostic.WithTarget(target)
+	}
+	return diagnostic.
+		withDefaultTargetPath(p.currentCommandIDPath()).
+		withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
 }

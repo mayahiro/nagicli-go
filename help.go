@@ -13,6 +13,8 @@ type usageVariant struct {
 
 // HelpUsageVariant is one structured invocation syntax in a Help Document
 type HelpUsageVariant struct {
+	// CommandIDPath identifies the source Command using stable IDs
+	CommandIDPath []string
 	// ID is the stable variant identifier
 	ID string
 	// Syntax is the command-path-relative syntax suffix
@@ -176,7 +178,12 @@ func (d HelpDocument) Usage() []string { return append([]string(nil), d.usage...
 
 // UsageVariants returns a copy of structured usage metadata
 func (d HelpDocument) UsageVariants() []HelpUsageVariant {
-	return append([]HelpUsageVariant(nil), d.usageVariants...)
+	variants := make([]HelpUsageVariant, len(d.usageVariants))
+	for index, variant := range d.usageVariants {
+		variants[index] = variant
+		variants[index].CommandIDPath = append([]string(nil), variant.CommandIDPath...)
+	}
+	return variants
 }
 
 // Commands returns a copy of child-command entries
@@ -332,8 +339,9 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 			"help path does not identify a command",
 		)
 	}
+	commandIDPath := c.commandIDPathAtPath(path)
 
-	usageVariants := helpUsageVariants(command, path)
+	usageVariants := helpUsageVariants(command, path, commandIDPath)
 	usage := make([]string, 0, len(usageVariants))
 	for _, variant := range usageVariants {
 		usage = append(usage, variant.CommandLine)
@@ -429,35 +437,73 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 	return document, nil
 }
 
-func helpUsageVariants(command *Command, path []string) []HelpUsageVariant {
+func helpUsageVariants(command *Command, path, commandIDPath []string) []HelpUsageVariant {
 	var variants []HelpUsageVariant
-	if len(command.usageVariants) == 0 {
-		variants = append(variants, newHelpUsageVariant(
-			"default",
-			generatedUsageSyntax(command),
-			path,
-		))
-	} else {
-		variants = make([]HelpUsageVariant, 0, len(command.usageVariants)+1)
-		for _, variant := range command.usageVariants {
-			variants = append(variants, newHelpUsageVariant(variant.id, variant.syntax, path))
+	if !(command.subcommandUsage == SubcommandUsageExpanded &&
+		command.subcommandRequired &&
+		len(command.usageVariants) == 0) {
+		variants = directHelpUsageVariants(command, path, commandIDPath, "")
+	}
+	switch command.subcommandUsage {
+	case SubcommandUsageAuto:
+		if len(command.subcommands) > 0 && !command.subcommandRequired {
+			variants = append(variants, newHelpUsageVariant(
+				commandIDPath,
+				"subcommand",
+				"[OPTIONS] <COMMAND>",
+				path,
+			))
+		}
+	case SubcommandUsageExpanded:
+		for _, child := range command.subcommands {
+			childIDPath := append(append([]string(nil), commandIDPath...), child.id)
+			variants = append(
+				variants,
+				directHelpUsageVariants(child, path, childIDPath, child.name)...,
+			)
 		}
 	}
-	if len(command.subcommands) > 0 && !command.subcommandRequired {
+	return variants
+}
+
+func directHelpUsageVariants(
+	command *Command,
+	helpPath, commandIDPath []string,
+	prefix string,
+) []HelpUsageVariant {
+	if len(command.usageVariants) == 0 {
+		return []HelpUsageVariant{newHelpUsageVariant(
+			commandIDPath,
+			"default",
+			prefixedUsage(prefix, generatedUsageSyntax(command)),
+			helpPath,
+		)}
+	}
+	variants := make([]HelpUsageVariant, 0, len(command.usageVariants))
+	for _, variant := range command.usageVariants {
 		variants = append(variants, newHelpUsageVariant(
-			"subcommand",
-			"[OPTIONS] <COMMAND>",
-			path,
+			commandIDPath,
+			variant.id,
+			prefixedUsage(prefix, variant.syntax),
+			helpPath,
 		))
 	}
 	return variants
 }
 
-func newHelpUsageVariant(id, syntax string, path []string) HelpUsageVariant {
+func prefixedUsage(prefix, syntax string) string {
+	if prefix == "" {
+		return syntax
+	}
+	return prefix + " " + syntax
+}
+
+func newHelpUsageVariant(commandIDPath []string, id, syntax string, path []string) HelpUsageVariant {
 	return HelpUsageVariant{
-		ID:          id,
-		Syntax:      syntax,
-		CommandLine: usageCommandLine(path, syntax),
+		CommandIDPath: append([]string(nil), commandIDPath...),
+		ID:            id,
+		Syntax:        syntax,
+		CommandLine:   usageCommandLine(path, syntax),
 	}
 }
 

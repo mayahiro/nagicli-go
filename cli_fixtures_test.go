@@ -35,6 +35,52 @@ func TestParsingMatchesSharedFixtures(t *testing.T) {
 	}
 }
 
+func TestCommandLocalScopesMatchSharedFixtures(t *testing.T) {
+	records := loadFixtures(t, "cli/scopes.txt", "cli-scopes", "argv", "expected")
+	command := cli.NewCommand("root").
+		ID("root-id").
+		Option(cli.ValueOption("session").Long("session").Default("root")).
+		Subcommand(
+			cli.NewCommand("run").
+				ID("run-id").
+				Option(cli.ValueOption("session").Long("session")),
+		)
+	for _, record := range records {
+		record := record
+		t.Run(record.ID, func(t *testing.T) {
+			result, err := command.Parse(arguments(record.Bytes("argv")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			invocation := result.Invocation()
+			root, ok := invocation.Scope("root-id")
+			if !ok {
+				t.Fatal("root scope was not found")
+			}
+			current, currentPresent := invocation.RawValue("session")
+			if !currentPresent {
+				current = "none"
+			}
+			rootValue, rootPresent := root.RawValue("session")
+			if !rootPresent {
+				rootValue = "none"
+			}
+			snapshot := fmt.Sprintf(
+				"command=%s;ids=%s;current=%s;root=%s;current-supplied=%t;root-supplied=%t",
+				strings.Join(invocation.CommandPath(), "/"),
+				strings.Join(invocation.CommandIDPath(), "/"),
+				current,
+				rootValue,
+				invocation.Supplied("session"),
+				root.Supplied("session"),
+			)
+			if snapshot != record.Field("expected") {
+				t.Fatalf("snapshot = %q, want %q", snapshot, record.Field("expected"))
+			}
+		})
+	}
+}
+
 func TestErrorsMatchSharedFixtures(t *testing.T) {
 	records := loadFixtures(
 		t,
@@ -67,6 +113,43 @@ func TestErrorsMatchSharedFixtures(t *testing.T) {
 	}
 }
 
+func TestDiagnosticMetadataMatchesSharedFixtures(t *testing.T) {
+	records := loadFixtures(t, "cli/diagnostics.txt", "cli-diagnostics", "argv", "expected")
+	command := fixtureCommand()
+	for _, record := range records {
+		record := record
+		t.Run(record.ID, func(t *testing.T) {
+			_, err := command.Parse(arguments(record.Bytes("argv")))
+			var diagnostic *cli.Diagnostic
+			if !errors.As(err, &diagnostic) {
+				t.Fatalf("error = %v, want Diagnostic", err)
+			}
+			targets := make([]string, 0, len(diagnostic.Targets()))
+			for _, target := range diagnostic.Targets() {
+				targets = append(
+					targets,
+					fmt.Sprintf(
+						"%s@%s:%s",
+						target.Kind(),
+						strings.Join(target.CommandIDPath(), "/"),
+						target.ValueID(),
+					),
+				)
+			}
+			snapshot := fmt.Sprintf(
+				"code=%s;category=%s;targets=%s;hints=%s",
+				diagnostic.Code(),
+				diagnostic.Category(),
+				strings.Join(targets, "+"),
+				strings.Join(diagnostic.Hints(), "+"),
+			)
+			if snapshot != record.Field("expected") {
+				t.Fatalf("snapshot = %q, want %q", snapshot, record.Field("expected"))
+			}
+		})
+	}
+}
+
 func TestHelpMatchesSharedFixtures(t *testing.T) {
 	records := loadFixtures(t, "cli/help.txt", "cli-help", "path", "expected")
 	command := fixtureCommand()
@@ -83,6 +166,68 @@ func TestHelpMatchesSharedFixtures(t *testing.T) {
 			}
 			if want := record.Text("expected"); got != want {
 				t.Fatalf("help = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestHelpPresentationMatchesSharedFixtures(t *testing.T) {
+	records := loadFixtures(
+		t,
+		"cli/help-presentation.txt",
+		"cli-help-presentation",
+		"mode",
+		"required",
+		"expected",
+	)
+	for _, record := range records {
+		record := record
+		t.Run(record.ID, func(t *testing.T) {
+			var mode cli.SubcommandUsageMode
+			switch record.Field("mode") {
+			case "auto":
+				mode = cli.SubcommandUsageAuto
+			case "hidden":
+				mode = cli.SubcommandUsageHidden
+			case "expanded":
+				mode = cli.SubcommandUsageExpanded
+			default:
+				t.Fatalf("invalid mode %q", record.Field("mode"))
+			}
+			command := cli.NewCommand("root").
+				ID("root-id").
+				SubcommandUsage(mode).
+				Subcommand(
+					cli.NewCommand("compare").
+						ID("compare-id").
+						UsageVariant("file", "--file <FILE>").
+						UsageVariant("stdin", "--stdin"),
+				).
+				Subcommand(cli.NewCommand("status").ID("status-id"))
+			if record.Field("required") == "true" {
+				command.RequireSubcommand()
+			} else {
+				command.UsageVariant("direct", "<ROOT>")
+			}
+			document, err := command.HelpDocument([]string{"root"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var variants []string
+			for _, variant := range document.UsageVariants() {
+				variants = append(
+					variants,
+					fmt.Sprintf(
+						"%s:%s=%s",
+						strings.Join(variant.CommandIDPath, "/"),
+						variant.ID,
+						variant.Syntax,
+					),
+				)
+			}
+			snapshot := strings.Join(variants, "|")
+			if snapshot != record.Field("expected") {
+				t.Fatalf("snapshot = %q, want %q", snapshot, record.Field("expected"))
 			}
 		})
 	}
@@ -206,10 +351,12 @@ func fixtureCommand() *cli.Command {
 				Entry("plain", "Default deterministic text").
 				Paragraph("Custom renderers consume the same Help Document"),
 		).
-		Validator(func(invocation *cli.Invocation) error {
+		Validator(func(invocation *cli.Invocation) *cli.Diagnostic {
 			input, _ := invocation.RawValue("input")
 			if input == "blocked" {
-				return cli.NewDiagnostic(cli.CodeValidation, "input 'blocked' is not allowed")
+				return cli.NewDiagnostic(cli.CodeValidation, "input 'blocked' is not allowed").
+					WithTarget(cli.ArgumentTarget("input")).
+					WithHint("choose another input")
 			}
 			return nil
 		}).

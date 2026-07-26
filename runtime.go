@@ -107,7 +107,8 @@ func NewOutcome(status ExitStatus) Outcome { return Outcome{status: status} }
 // Status returns the process status
 func (o Outcome) Status() ExitStatus { return o.status }
 
-// Handler executes one validated invocation
+// Handler executes one validated Invocation with the selected leaf as current
+// scope
 type Handler func(context *Context, invocation *Invocation) (Outcome, error)
 
 // Run parses and executes arguments through an injected Context
@@ -129,6 +130,36 @@ func (c *Command) RunWithPolicy(
 	if err != nil {
 		return renderError(context.stderr, err, policy)
 	}
+	return c.RunParsedWithPolicy(context, result, policy)
+}
+
+// RunParsed executes a result parsed by this Command Graph through the default
+// policy
+func (c *Command) RunParsed(context *Context, result ParseResult) (Outcome, error) {
+	return c.RunParsedWithPolicy(context, result, DefaultRuntimePolicy())
+}
+
+// RunParsedWithPolicy executes a result parsed by this Command Graph through a
+// policy
+//
+// This is the staged-adoption bridge between parser-only dispatch and Nagi
+// Help, version, or registered Handler execution. A result whose canonical or
+// stable path does not identify the same graph is rejected
+func (c *Command) RunParsedWithPolicy(
+	context *Context,
+	result ParseResult,
+	policy RuntimePolicy,
+) (Outcome, error) {
+	if context == nil {
+		return Outcome{}, errors.New("nagi cli: nil Context")
+	}
+	policy = policy.normalized()
+	if !equalPath(
+		c.commandIDPathAtPath(result.CommandPath()),
+		result.CommandIDPath(),
+	) {
+		return Outcome{}, errors.New("nagi cli: ParseResult does not belong to this Command Graph")
+	}
 	switch result.Kind() {
 	case ParseHelp:
 		document, err := c.HelpDocument(result.CommandPath())
@@ -146,17 +177,49 @@ func (c *Command) RunWithPolicy(
 		}
 		return Success(), nil
 	case ParseInvocation:
-		return c.runInvocation(context, result.Invocation(), policy)
+		if result.Invocation() == nil {
+			return Outcome{}, errors.New("nagi cli: ParseInvocation has no Invocation")
+		}
+		return c.RunInvocationWithPolicy(context, result.Invocation(), policy)
 	default:
 		return Outcome{}, errors.New("nagi cli: unknown parse result")
 	}
 }
 
-func (c *Command) runInvocation(
+// RunInvocation executes one Invocation validated by this Command Graph
+//
+// An Invocation whose canonical or stable command path does not identify the
+// same graph is rejected
+func (c *Command) RunInvocation(
+	context *Context,
+	invocation *Invocation,
+) (Outcome, error) {
+	return c.RunInvocationWithPolicy(context, invocation, DefaultRuntimePolicy())
+}
+
+// RunInvocationWithPolicy executes one Invocation validated by this Command
+// Graph through a policy
+//
+// An Invocation whose canonical or stable command path does not identify the
+// same graph is rejected
+func (c *Command) RunInvocationWithPolicy(
 	context *Context,
 	invocation *Invocation,
 	policy RuntimePolicy,
 ) (Outcome, error) {
+	if context == nil {
+		return Outcome{}, errors.New("nagi cli: nil Context")
+	}
+	if invocation == nil {
+		return Outcome{}, errors.New("nagi cli: nil Invocation")
+	}
+	policy = policy.normalized()
+	if !equalPath(
+		c.commandIDPathAtPath(invocation.CommandPath()),
+		invocation.CommandIDPath(),
+	) {
+		return Outcome{}, errors.New("nagi cli: Invocation does not belong to this Command Graph")
+	}
 	if context.cancellation.Err() != nil {
 		return NewOutcome(policy.exitCodes.StatusFor(CategoryCancellation)), nil
 	}
@@ -174,6 +237,16 @@ func (c *Command) runInvocation(
 	}
 	outcome, err := command.handler(context, invocation)
 	if err != nil {
+		var diagnostic *Diagnostic
+		if errors.As(err, &diagnostic) {
+			diagnostic.
+				withDefaultTargetPath(invocation.ValueScopeIDPath()).
+				WithCommandPath(invocation.CommandPath())
+			if diagnostic.Category() == CategoryUsage {
+				diagnostic.WithUsage(c.usageForPath(invocation.CommandPath()))
+			}
+			return renderDiagnostic(context.stderr, diagnostic, policy)
+		}
 		return renderError(context.stderr, err, policy)
 	}
 	if context.cancellation.Err() != nil && outcome.Status() == StatusSuccess {
