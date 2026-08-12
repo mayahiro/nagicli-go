@@ -40,6 +40,7 @@ go run ./examples/basic Nagi
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
 - Parser-first dispatch and parsed-Invocation execution for command-by-command adoption
 - Immutable handler-free completion resolution, dynamic providers, and Bash, Zsh, Fish, and PowerShell generators
+- Optional line-oriented Confirm, Select, Input, and Secret prompts with injected I/O
 - Process-free application tests through package `clitest`
 
 The shared [CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)
@@ -66,14 +67,16 @@ go test ./examples/basic
 | [Nested subcommands](examples/subcommands/README.md) | `go run ./examples/subcommands start -vv` |
 | [Staged adoption](examples/staged/README.md) | `go run ./examples/staged inspect page` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
+| [Lightweight prompts](examples/prompt/README.md) | `go run ./examples/prompt` |
 
 All examples are included in `go build ./...`
 
 ## Limitations
 
-Shell-specific generation is optional, and applications own installation and
-dynamic candidate I/O. Configuration-file loading, interactive prompts, and
-TUI integration are not provided. Long-running handlers and completion
+Shell-specific generation and line-oriented Prompt are optional, and
+applications own completion installation, dynamic candidate I/O, credential
+handling, and approval policy. Configuration-file loading and CLI-to-TUI
+integration are not provided. Long-running handlers and completion
 providers must poll the injected cancellation context cooperatively. The
 portable graph does not model arbitrary invocation grammars. Help-only Usage
 Variants can document validator-backed forms without changing parser semantics

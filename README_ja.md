@@ -37,6 +37,7 @@ go run ./examples/basic Nagi
 - 注入可能なstdin、stdout、stderr、environment、current directory、`context.Context` cancellation
 - Command単位の段階導入に使うparser-first dispatchとparsed Invocation実行
 - Handlerを含まないimmutable completion解決、dynamic provider、Bash、Zsh、Fish、PowerShell generator
+- 注入可能なI/Oを持つ任意の行指向Confirm、Select、Input、Secret
 - `clitest` packageによるprocessなしのapplication test
 
 共有[CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)が観測可能な契約とRust parityを定義します
@@ -59,12 +60,23 @@ go test ./examples/basic
 | [Nested subcommands](examples/subcommands/README.md) | `go run ./examples/subcommands start -vv` |
 | [段階導入](examples/staged/README.md) | `go run ./examples/staged inspect page` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
+| [軽量prompt](examples/prompt/README.md) | `go run ./examples/prompt` |
 
 全exampleは`go build ./...`の対象です
 
 ## 制約
 
-Shell固有生成は任意packageであり、installationとdynamic candidate I/OはApplicationが所有します。設定file読み込み、interactive prompt、TUI統合は提供しません。長時間実行するHandlerとcompletion providerは注入されたcancellation contextを協調的に確認する必要があります。Portable graphは任意のinvocation grammarを表現しません。Help-only Usage Variantはparser semanticsを変更せずにvalidatorで支えるformを記述できます
+Shell固有生成と行指向Promptは任意packageです
+
+Completion installation、dynamic candidate I/O、credential管理、approval policyはApplicationが所有します
+
+設定file読み込みとCLIからTUIへの統合は提供しません
+
+長時間実行するHandlerとcompletion providerは注入されたcancellation contextを協調的に確認する必要があります
+
+Portable graphは任意のinvocation grammarを表現しません
+
+Help-only Usage Variantはparser semanticsを変更せずにvalidatorで支えるformを記述できます
 
 ## License
 

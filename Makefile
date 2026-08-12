@@ -2,6 +2,7 @@
 
 bench:
 	GOTOOLCHAIN=local go test -run '^$$' -bench '^Benchmark(InheritedOptions|Completion)(SelectedPath|100UnrelatedBranches)$$' -benchmem -benchtime=100x -count=3 .
+	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkPrompt(Confirm|Input64KiB)$$' -benchmem -benchtime=100x -count=3 ./prompt
 
 build:
 	GOTOOLCHAIN=local go build ./...
