@@ -39,13 +39,14 @@ go run ./examples/basic Nagi
 - Stable Diagnostic codes, categories, value targets, and hints with configurable rendering and exit-code mapping
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
 - Parser-first dispatch and parsed-Invocation execution for command-by-command adoption
+- Immutable handler-free completion resolution, dynamic providers, and Bash, Zsh, Fish, and PowerShell generators
 - Process-free application tests through package `clitest`
 
 The shared [CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)
 define the observable contract and Rust parity. The
 [public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API.md)
-explains inherited options, command-local scopes, Help presentation,
-structured validators, and staged adoption
+explains inherited options, command-local scopes, completion, Help
+presentation, structured validators, and staged adoption
 
 ## Testing applications
 
@@ -64,16 +65,18 @@ go test ./examples/basic
 | [Basic command](examples/basic/README.md) | `go run ./examples/basic Nagi` |
 | [Nested subcommands](examples/subcommands/README.md) | `go run ./examples/subcommands start -vv` |
 | [Staged adoption](examples/staged/README.md) | `go run ./examples/staged inspect page` |
+| [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 
 All examples are included in `go build ./...`
 
 ## Limitations
 
-Shell completion, configuration-file loading, interactive prompts, and TUI
-integration are not provided. Long-running handlers must poll the injected
-cancellation context cooperatively. The portable graph does not model
-arbitrary invocation grammars. Help-only Usage Variants can document
-validator-backed forms without changing parser semantics
+Shell-specific generation is optional, and applications own installation and
+dynamic candidate I/O. Configuration-file loading, interactive prompts, and
+TUI integration are not provided. Long-running handlers and completion
+providers must poll the injected cancellation context cooperatively. The
+portable graph does not model arbitrary invocation grammars. Help-only Usage
+Variants can document validator-backed forms without changing parser semantics
 
 ## License
 

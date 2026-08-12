@@ -12,6 +12,10 @@
 // changing parsing. InvocationValidator returns a structured Diagnostic with
 // application codes, option or argument targets, and remediation hints.
 //
+// CompletionEngine snapshots the validated graph without handlers and resolves
+// static candidates plus only the active Option or Argument provider. Package
+// completion owns shell-specific generation and its reserved protocol.
+//
 // Parse, RunParsedWithPolicy, RunInvocationWithPolicy, and RuntimePolicy's pure
 // rendering and status helpers support command-by-command adoption in an
 // existing CLI. RunProcess remains the complete process integration.

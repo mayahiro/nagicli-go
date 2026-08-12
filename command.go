@@ -63,6 +63,7 @@ type OptionSpec struct {
 	defaultVal  string
 	requires    []optionRelation
 	conflicts   []optionRelation
+	completion  CompletionProvider
 }
 
 // Flag constructs a Boolean option
@@ -103,6 +104,15 @@ func (o *OptionSpec) Repeated() *OptionSpec { o.repeated = true; return o }
 
 // Parser sets the typed Value Parser
 func (o *OptionSpec) Parser(parser ValueParser) *OptionSpec { o.parser = parser; return o }
+
+// CompletionProvider sets the dynamic completion provider for this Value option
+//
+// The provider is only called while this option's value is the active
+// completion target. Parsing and handler execution never call it
+func (o *OptionSpec) CompletionProvider(provider CompletionProvider) *OptionSpec {
+	o.completion = provider
+	return o
+}
 
 // Environment sets an injected environment fallback
 func (o *OptionSpec) Environment(name string) *OptionSpec { o.environment = name; return o }
@@ -158,11 +168,12 @@ func (o *OptionSpec) IsInherited() bool { return o.inherited }
 
 // Argument defines one positional command value
 type Argument struct {
-	id       string
-	parser   ValueParser
-	help     string
-	required bool
-	repeated bool
+	id         string
+	parser     ValueParser
+	help       string
+	required   bool
+	repeated   bool
+	completion CompletionProvider
 }
 
 // Positional constructs a raw platform-value positional argument
@@ -172,6 +183,15 @@ func Positional(id string) *Argument {
 
 // Parser sets the typed Value Parser
 func (a *Argument) Parser(parser ValueParser) *Argument { a.parser = parser; return a }
+
+// CompletionProvider sets the dynamic completion provider for this positional argument
+//
+// The provider is only called while this argument is the active completion
+// target. Parsing and handler execution never call it
+func (a *Argument) CompletionProvider(provider CompletionProvider) *Argument {
+	a.completion = provider
+	return a
+}
 
 // Help sets the positional description
 func (a *Argument) Help(help string) *Argument { a.help = help; return a }
@@ -490,7 +510,7 @@ func validateCommandWithInherited(
 		if option.parser == nil {
 			return invalidSpec("option %q has no Value Parser", option.id)
 		}
-		if option.kind != OptionValue && (option.repeated || option.environment != "" || option.defaultSet) {
+		if option.kind != OptionValue && (option.repeated || option.environment != "" || option.defaultSet || option.completion != nil) {
 			return invalidSpec("non-value option %q has value-only configuration", option.id)
 		}
 		for _, relation := range append(append([]optionRelation(nil), option.requires...), option.conflicts...) {

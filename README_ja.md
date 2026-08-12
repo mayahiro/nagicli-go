@@ -36,11 +36,12 @@ go run ./examples/basic Nagi
 - 安定Diagnostic code、category、value target、hint、設定可能なrenderingとexit-code mapping
 - 注入可能なstdin、stdout、stderr、environment、current directory、`context.Context` cancellation
 - Command単位の段階導入に使うparser-first dispatchとparsed Invocation実行
+- Handlerを含まないimmutable completion解決、dynamic provider、Bash、Zsh、Fish、PowerShell generator
 - `clitest` packageによるprocessなしのapplication test
 
 共有[CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)が観測可能な契約とRust parityを定義します
 
-[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)では継承Option、command-local scope、Help presentation、structured validator、段階導入を説明します
+[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)では継承Option、command-local scope、completion、Help presentation、structured validator、段階導入を説明します
 
 ## Application test
 
@@ -57,12 +58,13 @@ go test ./examples/basic
 | [Basic command](examples/basic/README.md) | `go run ./examples/basic Nagi` |
 | [Nested subcommands](examples/subcommands/README.md) | `go run ./examples/subcommands start -vv` |
 | [段階導入](examples/staged/README.md) | `go run ./examples/staged inspect page` |
+| [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 
 全exampleは`go build ./...`の対象です
 
 ## 制約
 
-Shell completion、設定file読み込み、interactive prompt、TUI統合は提供しません。長時間実行するHandlerは注入されたcancellation contextを協調的に確認する必要があります。Portable graphは任意のinvocation grammarを表現しません。Help-only Usage Variantはparser semanticsを変更せずにvalidatorで支えるformを記述できます
+Shell固有生成は任意packageであり、installationとdynamic candidate I/OはApplicationが所有します。設定file読み込み、interactive prompt、TUI統合は提供しません。長時間実行するHandlerとcompletion providerは注入されたcancellation contextを協調的に確認する必要があります。Portable graphは任意のinvocation grammarを表現しません。Help-only Usage Variantはparser semanticsを変更せずにvalidatorで支えるformを記述できます
 
 ## License
 
