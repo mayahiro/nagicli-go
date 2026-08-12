@@ -55,6 +55,7 @@ type OptionSpec struct {
 	kind        OptionKind
 	parser      ValueParser
 	help        string
+	inherited   bool
 	required    bool
 	repeated    bool
 	environment string
@@ -87,6 +88,12 @@ func (o *OptionSpec) Short(name byte) *OptionSpec { o.short = name; return o }
 
 // Help sets the option description
 func (o *OptionSpec) Help(help string) *OptionSpec { o.help = help; return o }
+
+// Inherited makes this option visible in its declaring command and selected
+// descendants. Recognition continues after subcommand selection and
+// positionals until --. Parsed values remain stored in the declaring command
+// scope. Graph validation rejects descendant spelling collisions.
+func (o *OptionSpec) Inherited() *OptionSpec { o.inherited = true; return o }
 
 // Required requires this option after source resolution
 func (o *OptionSpec) Required() *OptionSpec { o.required = true; return o }
@@ -144,6 +151,10 @@ func (o *OptionSpec) ID() string { return o.id }
 
 // Kind returns the option kind
 func (o *OptionSpec) Kind() OptionKind { return o.kind }
+
+// IsInherited reports whether this option is visible in selected descendant
+// commands.
+func (o *OptionSpec) IsInherited() bool { return o.inherited }
 
 // Argument defines one positional command value
 type Argument struct {
@@ -389,10 +400,25 @@ func (c *Command) Description() string { return c.about }
 
 // Validate checks the entire Command Graph before argv is consumed
 func (c *Command) Validate() error {
-	return validateCommand(c, true)
+	return validateCommandWithInherited(
+		c,
+		true,
+		inheritedSpellings{},
+		[]string{c.name},
+	)
 }
 
-func validateCommand(command *Command, root bool) error {
+type inheritedSpellings struct {
+	longs  map[string]string
+	shorts map[byte]string
+}
+
+func validateCommandWithInherited(
+	command *Command,
+	root bool,
+	inherited inheritedSpellings,
+	commandPath []string,
+) error {
 	if !validID(command.id) {
 		return invalidSpec("invalid command ID %q", command.id)
 	}
@@ -435,6 +461,14 @@ func validateCommand(command *Command, root bool) error {
 				return invalidSpec("duplicate, invalid, or reserved long option %q", option.long)
 			}
 			longs[option.long] = struct{}{}
+			if origin, conflict := inherited.longs[option.long]; conflict {
+				return invalidSpec(
+					"command %q option %q conflicts with inherited option from %q",
+					strings.Join(commandPath, " "),
+					"--"+option.long,
+					origin,
+				)
+			}
 		}
 		if option.short != 0 {
 			if !asciiAlphanumeric(option.short) || reservedShort(option.short) {
@@ -444,6 +478,14 @@ func validateCommand(command *Command, root bool) error {
 				return invalidSpec("duplicate short option %q", option.short)
 			}
 			shorts[option.short] = struct{}{}
+			if origin, conflict := inherited.shorts[option.short]; conflict {
+				return invalidSpec(
+					"command %q option %q conflicts with inherited option from %q",
+					strings.Join(commandPath, " "),
+					fmt.Sprintf("-%c", option.short),
+					origin,
+				)
+			}
 		}
 		if option.parser == nil {
 			return invalidSpec("option %q has no Value Parser", option.id)
@@ -504,6 +546,21 @@ func validateCommand(command *Command, root bool) error {
 			return invalidSpec("command %q has a nil Invocation validator", command.name)
 		}
 	}
+	visibleInherited := cloneInheritedSpellings(inherited)
+	origin := strings.Join(commandPath, " ")
+	for index := range command.options {
+		option := &command.options[index]
+		if !option.inherited {
+			continue
+		}
+		if option.long != "" {
+			visibleInherited.longs[option.long] = origin
+		}
+		if option.short != 0 {
+			visibleInherited.shorts[option.short] = origin
+		}
+	}
+
 	childSpellings := map[string]struct{}{}
 	childIDs := map[string]struct{}{}
 	for _, child := range command.subcommands {
@@ -518,11 +575,26 @@ func validateCommand(command *Command, root bool) error {
 			}
 			childSpellings[spelling] = struct{}{}
 		}
-		if err := validateCommand(child, false); err != nil {
+		childPath := append(append([]string(nil), commandPath...), child.name)
+		if err := validateCommandWithInherited(child, false, visibleInherited, childPath); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func cloneInheritedSpellings(source inheritedSpellings) inheritedSpellings {
+	cloned := inheritedSpellings{
+		longs:  make(map[string]string, len(source.longs)),
+		shorts: make(map[byte]string, len(source.shorts)),
+	}
+	for spelling, origin := range source.longs {
+		cloned.longs[spelling] = origin
+	}
+	for spelling, origin := range source.shorts {
+		cloned.shorts[spelling] = origin
+	}
+	return cloned
 }
 
 func (c *Command) commandAtPath(path []string) *Command {
@@ -530,6 +602,28 @@ func (c *Command) commandAtPath(path []string) *Command {
 		return nil
 	}
 	command := c
+	for _, name := range path[1:] {
+		var selected *Command
+		for _, candidate := range command.subcommands {
+			if candidate.name == name {
+				selected = candidate
+				break
+			}
+		}
+		if selected == nil {
+			return nil
+		}
+		command = selected
+	}
+	return command
+}
+
+func (c *Command) commandsAtPath(path []string) []*Command {
+	if len(path) == 0 || path[0] != c.name {
+		return nil
+	}
+	command := c
+	commands := []*Command{c}
 	for _, name := range path[1:] {
 		var child *Command
 		for _, candidate := range command.subcommands {
@@ -542,8 +636,9 @@ func (c *Command) commandAtPath(path []string) *Command {
 			return nil
 		}
 		command = child
+		commands = append(commands, command)
 	}
-	return command
+	return commands
 }
 
 func (c *Command) commandIDPathAtPath(path []string) []string {

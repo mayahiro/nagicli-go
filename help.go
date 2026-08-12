@@ -33,6 +33,21 @@ type HelpEntry struct {
 	Description string
 }
 
+// HelpInheritedOption is one option inherited from an ancestor in a Help
+// Document.
+type HelpInheritedOption struct {
+	// CommandPath is the source canonical command path.
+	CommandPath []string
+	// CommandIDPath is the source stable command-ID path.
+	CommandIDPath []string
+	// ID is the source-local stable option ID.
+	ID string
+	// Label is the option display label.
+	Label string
+	// Description excludes the rendered origin note.
+	Description string
+}
+
 // HelpExample is one named command invocation
 type HelpExample struct {
 	// Name identifies the purpose of the example
@@ -150,19 +165,20 @@ type HelpOptionRelation struct {
 
 // HelpDocument is the structured, renderer-independent Help representation
 type HelpDocument struct {
-	commandPath     []string
-	description     string
-	usage           []string
-	usageVariants   []HelpUsageVariant
-	commands        []HelpEntry
-	arguments       []HelpEntry
-	options         []HelpEntry
-	optionRelations []HelpOptionRelation
-	optionGroups    []HelpOptionGroup
-	examples        []HelpExample
-	notes           []string
-	links           []HelpLink
-	sections        []HelpSection
+	commandPath      []string
+	description      string
+	usage            []string
+	usageVariants    []HelpUsageVariant
+	commands         []HelpEntry
+	arguments        []HelpEntry
+	options          []HelpEntry
+	inheritedOptions []HelpInheritedOption
+	optionRelations  []HelpOptionRelation
+	optionGroups     []HelpOptionGroup
+	examples         []HelpExample
+	notes            []string
+	links            []HelpLink
+	sections         []HelpSection
 }
 
 // CommandPath returns the canonical root-to-target path
@@ -199,6 +215,18 @@ func (d HelpDocument) Arguments() []HelpEntry {
 // Options returns a copy of option entries
 func (d HelpDocument) Options() []HelpEntry {
 	return append([]HelpEntry(nil), d.options...)
+}
+
+// InheritedOptions returns a deep copy in outermost-to-nearest ancestor and
+// definition order.
+func (d HelpDocument) InheritedOptions() []HelpInheritedOption {
+	options := make([]HelpInheritedOption, len(d.inheritedOptions))
+	for index, option := range d.inheritedOptions {
+		options[index] = option
+		options[index].CommandPath = append([]string(nil), option.CommandPath...)
+		options[index].CommandIDPath = append([]string(nil), option.CommandIDPath...)
+	}
+	return options
 }
 
 // OptionRelations returns a copy of pairwise option constraints
@@ -263,6 +291,18 @@ func (PlainHelpRenderer) RenderHelp(document HelpDocument) string {
 	renderHelpEntrySection(&output, "Commands", document.commands)
 	renderHelpEntrySection(&output, "Arguments", document.arguments)
 	renderHelpEntrySection(&output, "Options", document.options)
+	inheritedOptions := make([]HelpEntry, 0, len(document.inheritedOptions))
+	for _, option := range document.inheritedOptions {
+		description := option.Description
+		if description != "" {
+			description += " "
+		}
+		description += "[from " + strings.Join(option.CommandPath, " ") + "]"
+		inheritedOptions = append(inheritedOptions, HelpEntry{
+			ID: option.ID, Label: option.Label, Description: description,
+		})
+	}
+	renderHelpEntrySection(&output, "Inherited Options", inheritedOptions)
 
 	if len(document.optionRelations) > 0 || len(document.optionGroups) > 0 {
 		entries := make(
@@ -340,6 +380,7 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 		)
 	}
 	commandIDPath := c.commandIDPathAtPath(path)
+	commandLineage := c.commandsAtPath(path)
 
 	usageVariants := helpUsageVariants(command, path, commandIDPath)
 	usage := make([]string, 0, len(usageVariants))
@@ -411,6 +452,21 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 			Label:       "-V, --version",
 			Description: "Print version",
 		})
+	}
+	for scopeIndex, ancestor := range commandLineage[:len(commandLineage)-1] {
+		for optionIndex := range ancestor.options {
+			option := &ancestor.options[optionIndex]
+			if !option.inherited {
+				continue
+			}
+			document.inheritedOptions = append(document.inheritedOptions, HelpInheritedOption{
+				CommandPath:   append([]string(nil), path[:scopeIndex+1]...),
+				CommandIDPath: append([]string(nil), commandIDPath[:scopeIndex+1]...),
+				ID:            option.id,
+				Label:         optionLabel(option),
+				Description:   optionDescription(option),
+			})
+		}
 	}
 	for _, group := range command.optionGroups {
 		metadata := HelpOptionGroup{

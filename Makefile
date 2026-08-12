@@ -1,4 +1,7 @@
-.PHONY: build check format format-check lint test
+.PHONY: bench build check format format-check lint test
+
+bench:
+	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkInheritedOptions(SelectedPath|100UnrelatedBranches)$$' -benchmem -benchtime=100x -count=3 .
 
 build:
 	GOTOOLCHAIN=local go build ./...

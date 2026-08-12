@@ -2,9 +2,11 @@
 // structured Help and Diagnostics, and an injected policy-controlled runtime
 // for native Go command applications.
 //
-// Parent and child Commands may reuse local value IDs. Invocation access starts
-// at a documented current scope, while Scope selects one exact stable command-ID
-// path. RequireValueAs provides fallible schema-required typed access.
+// Options are local unless Inherited makes them visible in selected
+// descendants. Every value remains in its declaration scope. Parent and child
+// Commands may reuse local value IDs. Invocation access starts at a documented
+// current scope, while Scope selects one exact stable command-ID path.
+// RequireValueAs provides fallible schema-required typed access.
 //
 // Help-only Usage Variants and SubcommandUsage control presentation without
 // changing parsing. InvocationValidator returns a structured Diagnostic with

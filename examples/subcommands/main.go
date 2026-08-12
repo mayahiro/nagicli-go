@@ -20,6 +20,13 @@ func application() *cli.Command {
 				Default("default").
 				Help("Root configuration profile"),
 		).
+		Option(
+			cli.Count("verbose").
+				Long("verbose").
+				Short('v').
+				Help("Increase verbosity").
+				Inherited(),
+		).
 		RequireSubcommand().
 		SubcommandUsage(cli.SubcommandUsageExpanded).
 		Subcommand(
@@ -34,7 +41,6 @@ func application() *cli.Command {
 						Default("service").
 						Help("Service profile"),
 				).
-				Option(cli.Count("verbose").Long("verbose").Short('v').Help("Increase verbosity")).
 				Validator(func(invocation *cli.Invocation) *cli.Diagnostic {
 					profile, accessErr := cli.RequireValueAs[string](invocation, "profile")
 					if accessErr != nil {

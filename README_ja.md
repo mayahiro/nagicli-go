@@ -27,7 +27,7 @@ go run ./examples/basic Nagi
 
 ## 機能
 
-- Long、short、cluster、repeated、required、default、environment fallback付きoption
+- Localまたは明示的に継承するlong、short、cluster、repeated、required、default、environment fallback付きoption
 - Positional argument、nested subcommand、alias、`--` terminator
 - Raw byte string、UTF-8 string、signed 64-bit integer、finite value、custom typed parser
 - Source-aware option relation、4種類のportable option-group rule、typed Invocation validator
@@ -40,7 +40,7 @@ go run ./examples/basic Nagi
 
 共有[CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)が観測可能な契約とRust parityを定義します
 
-[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)ではcommand-local scope、Help presentation、structured validator、段階導入を説明します
+[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)では継承Option、command-local scope、Help presentation、structured validator、段階導入を説明します
 
 ## Application test
 

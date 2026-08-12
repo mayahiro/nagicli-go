@@ -30,7 +30,7 @@ go run ./examples/basic Nagi
 
 ## Capabilities
 
-- Long, short, clustered, repeated, required, defaulted, and environment-backed options
+- Local and explicitly inherited long, short, clustered, repeated, required, defaulted, and environment-backed options
 - Positional arguments, nested subcommands, aliases, and `--` termination
 - Raw byte strings, UTF-8 strings, signed 64-bit integers, finite values, and custom typed parsers
 - Source-aware option relations, four portable option-group rules, and typed Invocation validators
@@ -44,8 +44,8 @@ go run ./examples/basic Nagi
 The shared [CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)
 define the observable contract and Rust parity. The
 [public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API.md)
-explains command-local scopes, Help presentation, structured validators, and
-staged adoption
+explains inherited options, command-local scopes, Help presentation,
+structured validators, and staged adoption
 
 ## Testing applications
 
