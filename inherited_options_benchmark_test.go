@@ -69,3 +69,39 @@ func BenchmarkInheritedOptions100UnrelatedBranches(b *testing.B) {
 func BenchmarkDeprecatedOption1000Occurrences(b *testing.B) {
 	benchmarkInheritedOptions(b, 0, true)
 }
+
+func benchmarkValueOption(b *testing.B, sensitive bool) {
+	token := cli.ValueOption("token").Long("token").Repeated()
+	if sensitive {
+		token.Sensitive()
+	}
+	command := cli.NewCommand("root").Option(token)
+	arguments := make([]string, 0, benchmarkOptionOccurrences*2)
+	for range benchmarkOptionOccurrences {
+		arguments = append(arguments, "--token", "value")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		result, err := command.Parse(arguments)
+		if err != nil {
+			b.Fatal(err)
+		}
+		invocation := result.Invocation()
+		value, present := invocation.RawValue("token")
+		if !present || value != "value" {
+			b.Fatalf("token value = %q, %t", value, present)
+		}
+		if invocation.ValueIsSensitive("token") != sensitive {
+			b.Fatalf("token sensitivity = %t, want %t", invocation.ValueIsSensitive("token"), sensitive)
+		}
+	}
+}
+
+func BenchmarkValueOption1000Occurrences(b *testing.B) {
+	benchmarkValueOption(b, false)
+}
+
+func BenchmarkSensitiveValueOption1000Occurrences(b *testing.B) {
+	benchmarkValueOption(b, true)
+}

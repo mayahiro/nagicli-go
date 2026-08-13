@@ -17,8 +17,10 @@ type invocationValue struct {
 }
 
 type invocationDefinition struct {
-	kind     OptionKind
-	repeated bool
+	kind      OptionKind
+	repeated  bool
+	sensitive bool
+	argument  bool
 }
 
 type invocationScopeData struct {
@@ -159,6 +161,13 @@ func (i *Invocation) IsRepeated(id string) bool {
 	return declared && definition.kind == OptionValue && definition.repeated
 }
 
+// ValueIsSensitive reports whether the nearest visible Value declaration is
+// Sensitive
+func (i *Invocation) ValueIsSensitive(id string) bool {
+	definition, _, declared, _ := i.lookup(id)
+	return declared && definition.kind == OptionValue && definition.sensitive
+}
+
 // ValueIDs returns sorted visible IDs that have a value
 func (i *Invocation) ValueIDs() []string {
 	seen := map[string]struct{}{}
@@ -190,6 +199,33 @@ func (i *Invocation) lookup(id string) (invocationDefinition, invocationValue, b
 		return definition, value, true, present
 	}
 	return invocationDefinition{}, invocationValue{}, false, false
+}
+
+func (i *Invocation) markSensitiveTarget(target DiagnosticTarget) DiagnosticTarget {
+	scopeIndex := -1
+	if len(target.commandIDPath) == 0 {
+		scopeIndex = i.currentScope
+	} else {
+		for index := range i.scopes {
+			if equalPath(i.commandIDPath[:index+1], target.commandIDPath) {
+				scopeIndex = index
+				break
+			}
+		}
+	}
+	if scopeIndex < 0 {
+		return target
+	}
+	definition, declared := i.scopes[scopeIndex].definitions[target.valueID]
+	if !declared {
+		return target
+	}
+	targetIsArgument := target.kind == TargetArgument
+	return target.withSensitive(
+		definition.kind == OptionValue &&
+			definition.argument == targetIsArgument &&
+			definition.sensitive,
+	)
 }
 
 // CommandPath returns the canonical path prefix for this exact scope
@@ -269,6 +305,12 @@ func (s InvocationScope) RawValue(id string) (string, bool) {
 func (s InvocationScope) IsRepeated(id string) bool {
 	definition, _, declared, _ := s.lookup(id)
 	return declared && definition.kind == OptionValue && definition.repeated
+}
+
+// ValueIsSensitive reports whether one local Value declaration is Sensitive
+func (s InvocationScope) ValueIsSensitive(id string) bool {
+	definition, _, declared, _ := s.lookup(id)
+	return declared && definition.kind == OptionValue && definition.sensitive
 }
 
 // ValueIDs returns sorted local IDs that have a value
@@ -480,15 +522,19 @@ func newInvocationScopeData(command *Command) invocationScopeData {
 	for index := range command.options {
 		option := &command.options[index]
 		scope.definitions[option.id] = invocationDefinition{
-			kind:     option.kind,
-			repeated: option.repeated,
+			kind:      option.kind,
+			repeated:  option.repeated,
+			sensitive: option.sensitive,
+			argument:  false,
 		}
 	}
 	for index := range command.arguments {
 		argument := &command.arguments[index]
 		scope.definitions[argument.id] = invocationDefinition{
-			kind:     OptionValue,
-			repeated: argument.repeated,
+			kind:      OptionValue,
+			repeated:  argument.repeated,
+			sensitive: argument.sensitive,
+			argument:  true,
 		}
 	}
 	return scope
@@ -705,6 +751,7 @@ func (p *argumentParser) applyOption(
 			option.parser,
 			raw,
 			SourceCommandLine,
+			option.sensitive,
 			target(),
 		)
 		if err != nil {
@@ -824,6 +871,7 @@ func (p *argumentParser) parsePositional(raw string) error {
 		argument.parser,
 		raw,
 		SourceCommandLine,
+		argument.sensitive,
 		ArgumentTarget(argument.id),
 	)
 	if err != nil {
@@ -865,6 +913,7 @@ func (p *argumentParser) resolveFallbacks() error {
 				option.parser,
 				raw,
 				source,
+				option.sensitive,
 				OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
 			)
 			if err != nil {
@@ -987,6 +1036,7 @@ func (p *argumentParser) runValidators(invocation *Invocation) error {
 			}
 			return diagnostic.
 				withDefaultTargetPath(invocation.commandIDPath[:commandIndex+1]).
+				mapTargets(invocation.markSensitiveTarget).
 				withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
 		}
 	}
@@ -998,17 +1048,22 @@ func (p *argumentParser) parseValue(
 	parser ValueParser,
 	raw string,
 	source ValueSource,
+	sensitive bool,
 	target DiagnosticTarget,
 ) (ParsedValue, error) {
 	typed, err := parser.Parse(raw)
 	if err != nil {
+		message := fmt.Sprintf("invalid value %s for '%s': %s", quoteValue(raw), id, err)
+		if sensitive {
+			message = fmt.Sprintf("invalid value %s for '%s'", RedactedValue, id)
+		}
 		return ParsedValue{}, p.diagTargets(
 			CodeInvalidValue,
-			fmt.Sprintf("invalid value %s for %q: %s", quoteValue(raw), id, err),
+			message,
 			target,
 		)
 	}
-	return ParsedValue{raw: raw, source: source, typed: typed}, nil
+	return ParsedValue{raw: raw, source: source, typed: typed, sensitive: sensitive}, nil
 }
 
 func (p *argumentParser) pushValue(scopeIndex int, id string, parsed ParsedValue, repeated bool) {
@@ -1041,9 +1096,47 @@ func (p *argumentParser) diagTargets(
 ) *Diagnostic {
 	diagnostic := NewDiagnostic(code, message)
 	for _, target := range targets {
-		diagnostic.WithTarget(target)
+		diagnostic.WithTarget(p.markSensitiveTarget(target))
 	}
 	return diagnostic.
 		withDefaultTargetPath(p.currentCommandIDPath()).
 		withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
+}
+
+func (p *argumentParser) markSensitiveTarget(target DiagnosticTarget) DiagnosticTarget {
+	scopeIndex := -1
+	if len(target.commandIDPath) == 0 {
+		scopeIndex = len(p.commands) - 1
+	} else {
+		for index := range p.commands {
+			if equalPath(p.commandIDPath(index), target.commandIDPath) {
+				scopeIndex = index
+				break
+			}
+		}
+	}
+	if scopeIndex < 0 {
+		return target
+	}
+	command := p.commands[scopeIndex]
+	sensitive := false
+	switch target.kind {
+	case TargetOption:
+		for index := range command.options {
+			option := &command.options[index]
+			if option.id == target.valueID {
+				sensitive = option.sensitive
+				break
+			}
+		}
+	case TargetArgument:
+		for index := range command.arguments {
+			argument := &command.arguments[index]
+			if argument.id == target.valueID {
+				sensitive = argument.sensitive
+				break
+			}
+		}
+	}
+	return target.withSensitive(sensitive)
 }

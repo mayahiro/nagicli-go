@@ -94,6 +94,7 @@ type DiagnosticTarget struct {
 	kind          DiagnosticTargetKind
 	commandIDPath []string
 	valueID       string
+	sensitive     bool
 }
 
 // OptionTarget constructs an option target in the current Invocation scope
@@ -122,6 +123,15 @@ func (t DiagnosticTarget) CommandIDPath() []string {
 
 // ValueID returns the command-local value ID
 func (t DiagnosticTarget) ValueID() string { return t.valueID }
+
+// IsSensitive reports whether this target identifies a Sensitive Value
+// declaration
+func (t DiagnosticTarget) IsSensitive() bool { return t.sensitive }
+
+func (t DiagnosticTarget) withSensitive(sensitive bool) DiagnosticTarget {
+	t.sensitive = sensitive
+	return t
+}
 
 // Diagnostic is a structured definition, parser, or handler failure
 type Diagnostic struct {
@@ -230,6 +240,13 @@ func (d *Diagnostic) withDefaultTargetPath(path []string) *Diagnostic {
 		if len(d.targets[index].commandIDPath) == 0 {
 			d.targets[index].commandIDPath = append([]string(nil), path...)
 		}
+	}
+	return d
+}
+
+func (d *Diagnostic) mapTargets(mapper func(DiagnosticTarget) DiagnosticTarget) *Diagnostic {
+	for index := range d.targets {
+		d.targets[index] = mapper(d.targets[index])
 	}
 	return d
 }

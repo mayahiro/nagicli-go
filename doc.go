@@ -12,6 +12,11 @@
 // changing parsing. InvocationValidator returns a structured Diagnostic with
 // application codes, option or argument targets, and remediation hints.
 //
+// OptionSpec.Sensitive and Argument.Sensitive attach generic presentation
+// metadata. Framework Help, parser Diagnostics, formatting, and completion
+// redact or suppress those values while explicit Invocation access preserves
+// the original raw and typed data.
+//
 // CompletionEngine snapshots the validated graph without handlers and resolves
 // static candidates plus only the active Option or Argument provider. Package
 // completion owns shell-specific generation and its reserved protocol.

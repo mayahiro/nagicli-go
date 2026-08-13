@@ -251,6 +251,7 @@ func (c *Command) RunInvocationWithPolicy(
 		if errors.As(err, &diagnostic) {
 			diagnostic.
 				withDefaultTargetPath(invocation.ValueScopeIDPath()).
+				mapTargets(invocation.markSensitiveTarget).
 				WithCommandPath(invocation.CommandPath())
 			if diagnostic.Category() == CategoryUsage {
 				diagnostic.WithUsage(c.usageForPath(invocation.CommandPath()))

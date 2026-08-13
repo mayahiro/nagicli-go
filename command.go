@@ -60,6 +60,7 @@ type OptionSpec struct {
 	inherited   bool
 	required    bool
 	repeated    bool
+	sensitive   bool
 	environment string
 	defaultSet  bool
 	defaultVal  string
@@ -114,6 +115,12 @@ func (o *OptionSpec) Required() *OptionSpec { o.required = true; return o }
 
 // Repeated allows a Value option to appear multiple times
 func (o *OptionSpec) Repeated() *OptionSpec { o.repeated = true; return o }
+
+// Sensitive marks this Value option for redaction in framework-controlled
+// Help, Diagnostic, formatting, and completion projections
+//
+// Parsing and explicit raw or typed value access remain unchanged
+func (o *OptionSpec) Sensitive() *OptionSpec { o.sensitive = true; return o }
 
 // Parser sets the typed Value Parser
 func (o *OptionSpec) Parser(parser ValueParser) *OptionSpec { o.parser = parser; return o }
@@ -182,6 +189,10 @@ func (o *OptionSpec) IsInherited() bool { return o.inherited }
 // IsHidden reports whether this option is omitted from generated projections
 func (o *OptionSpec) IsHidden() bool { return o.hidden }
 
+// IsSensitive reports whether this Value option requires redaction in
+// framework-controlled projections
+func (o *OptionSpec) IsSensitive() bool { return o.sensitive }
+
 // Deprecation returns replacement metadata when this option is deprecated
 func (o *OptionSpec) Deprecation() (Deprecation, bool) {
 	return o.deprecation, o.deprecation.configured
@@ -194,6 +205,7 @@ type Argument struct {
 	help       string
 	required   bool
 	repeated   bool
+	sensitive  bool
 	completion CompletionProvider
 }
 
@@ -223,8 +235,18 @@ func (a *Argument) Required() *Argument { a.required = true; return a }
 // Repeated allows this final positional to consume remaining values
 func (a *Argument) Repeated() *Argument { a.repeated = true; return a }
 
+// Sensitive marks this positional value for redaction in framework-controlled
+// Help, Diagnostic, formatting, and completion projections
+//
+// Parsing and explicit raw or typed value access remain unchanged
+func (a *Argument) Sensitive() *Argument { a.sensitive = true; return a }
+
 // ID returns the stable value identifier
 func (a *Argument) ID() string { return a.id }
+
+// IsSensitive reports whether this positional value requires redaction in
+// framework-controlled projections
+func (a *Argument) IsSensitive() bool { return a.sensitive }
 
 // OptionGroup applies one cardinality rule to local command options
 type OptionGroup struct {
@@ -560,7 +582,7 @@ func validateCommandWithInherited(
 		if option.parser == nil {
 			return invalidSpec("option %q has no Value Parser", option.id)
 		}
-		if option.kind != OptionValue && (option.repeated || option.environment != "" || option.defaultSet || option.completion != nil) {
+		if option.kind != OptionValue && (option.repeated || option.sensitive || option.environment != "" || option.defaultSet || option.completion != nil) {
 			return invalidSpec("non-value option %q has value-only configuration", option.id)
 		}
 		for _, relation := range append(append([]optionRelation(nil), option.requires...), option.conflicts...) {
@@ -806,10 +828,18 @@ func optionDescription(option *OptionSpec) string {
 		description = appendNote(description, "env: "+option.environment)
 	}
 	if option.defaultSet {
-		description = appendNote(description, "default: "+displayValue(option.defaultVal))
+		value := RedactedValue
+		if !option.sensitive {
+			value = displayValue(option.defaultVal)
+		}
+		description = appendNote(description, "default: "+value)
 	}
 	if values := option.parser.PossibleValues(); len(values) > 0 {
-		description = appendNote(description, "possible: "+joinComma(values))
+		possible := RedactedValue
+		if !option.sensitive {
+			possible = joinComma(values)
+		}
+		description = appendNote(description, "possible: "+possible)
 	}
 	return description
 }

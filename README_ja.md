@@ -33,6 +33,7 @@ go run ./examples/basic Nagi
 - Source-aware option relation、4種類のportable option-group rule、typed Invocation validator
 - Command-local value ID、stable IDによるexact scope、失敗理由を返すrequired typed access
 - Structured noticeを持つ汎用HiddenとDeprecatedのCommandとOption lifecycle metadata
+- Help、Diagnostic、formatting、completionをredactする汎用Sensitive Value metadata
 - Structured deterministic Help、制御可能なsubcommand Usage Variant、custom sectionとrenderer、`help [COMMAND...]`
 - 安定Diagnostic code、category、value target、hint、plainまたはstable JSON rendering、設定可能なexit-code mapping
 - 注入可能なstdin、stdout、stderr、environment、current directory、`context.Context` cancellation
@@ -44,7 +45,7 @@ go run ./examples/basic Nagi
 
 共有[CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)が観測可能な契約とRust parityを定義します
 
-[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)では継承Option、command-local scope、completion、Help presentation、lifecycle metadata、structured validator、段階導入を説明します
+[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)では継承Option、command-local scope、completion、Help presentation、lifecycleとSensitive Value metadata、structured validator、段階導入を説明します
 
 ## Application test
 
@@ -63,6 +64,7 @@ go test ./examples/basic
 | [段階導入](examples/staged/README.md) | `go run ./examples/staged inspect page` |
 | [JSON Diagnostic](examples/json-diagnostic/README.md) | `go run ./examples/json-diagnostic` |
 | [Command lifecycle](examples/lifecycle/README.md) | `go run ./examples/lifecycle --legacy old` |
+| [Sensitive Value](examples/sensitive-values/README.md) | `go run ./examples/sensitive-values --token demo-token` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [軽量prompt](examples/prompt/README.md) | `go run ./examples/prompt` |
 | [TTY-aware status](examples/status/README.md) | `go run ./examples/status` |
@@ -74,6 +76,8 @@ go test ./examples/basic
 Shell固有生成、行指向Prompt、同期Status Reporterは任意packageです
 
 Completion installation、dynamic candidate I/O、credential管理、approval policy、status更新時点、progressの意味はApplicationが所有します
+
+Sensitive Value metadataはframework projectionをredactしますが、memoryをzeroizeせず、OSのprocess argumentまたはshell historyから値を隠しません
 
 設定file読み込みとCLIからTUIへの統合は提供しません
 

@@ -7,6 +7,10 @@ import (
 	"unicode/utf8"
 )
 
+// RedactedValue is the stable marker used when a framework projection hides a
+// Sensitive value
+const RedactedValue = "<redacted>"
+
 // ValueSource identifies where a parsed value came from
 type ValueSource uint8
 
@@ -21,9 +25,10 @@ const (
 
 // ParsedValue stores one raw value, its source, and its typed parser result
 type ParsedValue struct {
-	raw    string
-	source ValueSource
-	typed  any
+	raw       string
+	source    ValueSource
+	typed     any
+	sensitive bool
 }
 
 // Raw returns the platform argument bytes as a Go string
@@ -36,9 +41,29 @@ func (v ParsedValue) Source() ValueSource {
 	return v.source
 }
 
+// IsSensitive reports whether framework-controlled display must redact this
+// value
+func (v ParsedValue) IsSensitive() bool { return v.sensitive }
+
 // Typed returns the language-native parser result
 func (v ParsedValue) Typed() any {
 	return v.typed
+}
+
+// Format implements fmt.Formatter without exposing a Sensitive raw value or
+// any typed parser result
+func (v ParsedValue) Format(state fmt.State, _ rune) {
+	raw := v.raw
+	if v.sensitive {
+		raw = RedactedValue
+	}
+	fmt.Fprintf(
+		state,
+		"ParsedValue{raw:%q source:%d sensitive:%t}",
+		raw,
+		v.source,
+		v.sensitive,
+	)
 }
 
 // ValueParser parses one raw option or positional value

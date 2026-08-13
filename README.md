@@ -36,6 +36,7 @@ go run ./examples/basic Nagi
 - Source-aware option relations, four portable option-group rules, and typed Invocation validators
 - Command-local value IDs, exact stable-ID scopes, and fallible required typed access
 - Generic Hidden and Deprecated command and option lifecycle metadata with structured notices
+- Generic Sensitive Value metadata with Help, Diagnostic, formatting, and completion redaction
 - Structured deterministic Help, controllable subcommand Usage Variants, custom sections and renderers, and `help [COMMAND...]`
 - Stable Diagnostic codes, categories, value targets, and hints with plain or stable JSON rendering and configurable exit-code mapping
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
@@ -49,7 +50,8 @@ The shared [CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.m
 define the observable contract and Rust parity. The
 [public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API.md)
 explains inherited options, command-local scopes, completion, Help
-presentation, lifecycle metadata, structured validators, and staged adoption
+presentation, lifecycle and Sensitive Value metadata, structured validators,
+and staged adoption
 
 ## Testing applications
 
@@ -70,6 +72,7 @@ go test ./examples/basic
 | [Staged adoption](examples/staged/README.md) | `go run ./examples/staged inspect page` |
 | [JSON Diagnostic](examples/json-diagnostic/README.md) | `go run ./examples/json-diagnostic` |
 | [Command lifecycle](examples/lifecycle/README.md) | `go run ./examples/lifecycle --legacy old` |
+| [Sensitive Value](examples/sensitive-values/README.md) | `go run ./examples/sensitive-values --token demo-token` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [Lightweight prompts](examples/prompt/README.md) | `go run ./examples/prompt` |
 | [TTY-aware status](examples/status/README.md) | `go run ./examples/status` |
@@ -81,7 +84,9 @@ All examples are included in `go build ./...`
 Shell-specific generation, line-oriented Prompt, and synchronous Status
 Reporter are optional, and applications own completion installation, dynamic
 candidate I/O, credential handling, approval policy, status timing, and
-progress meaning. Configuration-file loading and CLI-to-TUI
+progress meaning. Sensitive Value metadata redacts framework projections but
+does not zeroize memory or hide process arguments from the operating system or
+shell history. Configuration-file loading and CLI-to-TUI
 integration are not provided. Long-running handlers and completion
 providers must poll the injected cancellation context cooperatively. The
 portable graph does not model arbitrary invocation grammars. Help-only Usage

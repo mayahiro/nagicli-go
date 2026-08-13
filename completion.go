@@ -26,18 +26,19 @@ type CompletionTarget struct {
 	kind          CompletionTargetKind
 	commandIDPath []string
 	valueID       string
+	sensitive     bool
 }
 
 func commandCompletionTarget(path []string) CompletionTarget {
 	return CompletionTarget{kind: CompletionTargetCommand, commandIDPath: append([]string(nil), path...)}
 }
 
-func optionCompletionTarget(path []string, valueID string) CompletionTarget {
-	return CompletionTarget{kind: CompletionTargetOption, commandIDPath: append([]string(nil), path...), valueID: valueID}
+func optionCompletionTarget(path []string, valueID string, sensitive bool) CompletionTarget {
+	return CompletionTarget{kind: CompletionTargetOption, commandIDPath: append([]string(nil), path...), valueID: valueID, sensitive: sensitive}
 }
 
-func argumentCompletionTarget(path []string, valueID string) CompletionTarget {
-	return CompletionTarget{kind: CompletionTargetArgument, commandIDPath: append([]string(nil), path...), valueID: valueID}
+func argumentCompletionTarget(path []string, valueID string, sensitive bool) CompletionTarget {
+	return CompletionTarget{kind: CompletionTargetArgument, commandIDPath: append([]string(nil), path...), valueID: valueID, sensitive: sensitive}
 }
 
 // Kind returns the target category
@@ -50,6 +51,9 @@ func (t CompletionTarget) CommandIDPath() []string {
 
 // ValueID returns the command-local value ID for an Option or Argument target
 func (t CompletionTarget) ValueID() string { return t.valueID }
+
+// IsSensitive reports whether the active value declaration is Sensitive
+func (t CompletionTarget) IsSensitive() bool { return t.sensitive }
 
 // CompletionOccurrenceKind identifies how one partial argv occurrence was represented
 type CompletionOccurrenceKind uint8
@@ -311,6 +315,7 @@ type completionEngineOption struct {
 	deprecation    Deprecation
 	inherited      bool
 	repeated       bool
+	sensitive      bool
 	possibleValues []string
 	provider       CompletionProvider
 }
@@ -318,6 +323,7 @@ type completionEngineOption struct {
 type completionEngineArgument struct {
 	id             string
 	repeated       bool
+	sensitive      bool
 	possibleValues []string
 	provider       CompletionProvider
 }
@@ -445,26 +451,32 @@ func snapshotCompletionCommand(command *Command, hasVersion bool) *completionEng
 	for index := range command.options {
 		option := &command.options[index]
 		snapshot.options[index] = completionEngineOption{
-			id:             option.id,
-			long:           option.long,
-			short:          option.short,
-			kind:           option.kind,
-			help:           option.help,
-			hidden:         option.hidden,
-			deprecation:    option.deprecation,
-			inherited:      option.inherited,
-			repeated:       option.repeated,
-			possibleValues: append([]string(nil), option.parser.PossibleValues()...),
-			provider:       option.completion,
+			id:          option.id,
+			long:        option.long,
+			short:       option.short,
+			kind:        option.kind,
+			help:        option.help,
+			hidden:      option.hidden,
+			deprecation: option.deprecation,
+			inherited:   option.inherited,
+			repeated:    option.repeated,
+			sensitive:   option.sensitive,
+		}
+		if !option.sensitive {
+			snapshot.options[index].possibleValues = append([]string(nil), option.parser.PossibleValues()...)
+			snapshot.options[index].provider = option.completion
 		}
 	}
 	for index := range command.arguments {
 		argument := &command.arguments[index]
 		snapshot.arguments[index] = completionEngineArgument{
-			id:             argument.id,
-			repeated:       argument.repeated,
-			possibleValues: append([]string(nil), argument.parser.PossibleValues()...),
-			provider:       argument.completion,
+			id:        argument.id,
+			repeated:  argument.repeated,
+			sensitive: argument.sensitive,
+		}
+		if !argument.sensitive {
+			snapshot.arguments[index].possibleValues = append([]string(nil), argument.parser.PossibleValues()...)
+			snapshot.arguments[index].provider = argument.completion
 		}
 	}
 	for index, child := range command.subcommands {
@@ -645,7 +657,7 @@ func (s *completionState) consumePositional(raw string) {
 	argument := &s.active().arguments[s.positionalIndex]
 	s.positionalStarted = true
 	s.partial = append(s.partial, CompletionOccurrence{
-		target: argumentCompletionTarget(s.commandIDPath(), argument.id),
+		target: argumentCompletionTarget(s.commandIDPath(), argument.id, argument.sensitive),
 		kind:   CompletionOccurrenceValue,
 		raw:    raw,
 		rawSet: true,
@@ -663,7 +675,7 @@ func (s *completionState) pushOptionOccurrence(
 	rawSet bool,
 ) {
 	s.partial = append(s.partial, CompletionOccurrence{
-		target: optionCompletionTarget(s.targetPath(scopeIndex), option.id),
+		target: optionCompletionTarget(s.targetPath(scopeIndex), option.id, option.sensitive),
 		kind:   kind,
 		raw:    raw,
 		rawSet: rawSet,
@@ -775,7 +787,9 @@ func (s *completionState) resolve(current string) completionResolution {
 	}
 	if completingWord && s.positionalIndex < len(s.active().arguments) {
 		valueTarget = &s.active().arguments[s.positionalIndex]
-		s.pushValues(&candidates, valueTarget.possibleValues, "", current)
+		if !valueTarget.sensitive {
+			s.pushValues(&candidates, valueTarget.possibleValues, "", current)
+		}
 	}
 	if s.optionsEnabled && (completingOption || current == "") {
 		s.pushOptions(&candidates, current)
@@ -784,8 +798,10 @@ func (s *completionState) resolve(current string) completionResolution {
 	target := commandCompletionTarget(commandIDs)
 	var provider CompletionProvider
 	if valueTarget != nil {
-		target = argumentCompletionTarget(commandIDs, valueTarget.id)
-		provider = valueTarget.provider
+		target = argumentCompletionTarget(commandIDs, valueTarget.id, valueTarget.sensitive)
+		if !valueTarget.sensitive {
+			provider = valueTarget.provider
+		}
 	}
 	return completionResolution{
 		commandPath: commandPath,
@@ -849,14 +865,14 @@ func (s *completionState) resolveOptionValue(
 	option := &s.commands[scopeIndex].options[optionIndex]
 	var candidates []CompletionCandidate
 	var provider CompletionProvider
-	if !option.hidden {
+	if !option.hidden && !option.sensitive {
 		s.pushValues(&candidates, option.possibleValues, valuePrefix, prefix)
 		provider = option.provider
 	}
 	return completionResolution{
 		commandPath: append([]string(nil), s.commandPath...),
 		commandIDs:  commandIDs,
-		target:      optionCompletionTarget(s.targetPath(scopeIndex), option.id),
+		target:      optionCompletionTarget(s.targetPath(scopeIndex), option.id, option.sensitive),
 		prefix:      prefix,
 		valuePrefix: valuePrefix,
 		partial:     s.partial,

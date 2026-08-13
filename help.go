@@ -31,8 +31,13 @@ type HelpEntry struct {
 	Label string
 	// Description explains the labeled item
 	Description string
+	sensitive   bool
 	deprecation Deprecation
 }
+
+// IsSensitive reports whether this entry describes a Sensitive Value
+// declaration
+func (e HelpEntry) IsSensitive() bool { return e.sensitive }
 
 // Deprecation returns replacement metadata when this entry is deprecated
 func (e HelpEntry) Deprecation() (Deprecation, bool) {
@@ -52,8 +57,12 @@ type HelpInheritedOption struct {
 	Label string
 	// Description excludes the rendered origin note.
 	Description string
+	sensitive   bool
 	deprecation Deprecation
 }
+
+// IsSensitive reports whether this inherited option is Sensitive
+func (o HelpInheritedOption) IsSensitive() bool { return o.sensitive }
 
 // Deprecation returns replacement metadata when this inherited option is
 // deprecated
@@ -327,6 +336,7 @@ func (PlainHelpRenderer) RenderHelp(document HelpDocument) string {
 			ID:          option.ID,
 			Label:       option.Label,
 			Description: description,
+			sensitive:   option.sensitive,
 			deprecation: option.deprecation,
 		})
 	}
@@ -452,6 +462,7 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 			ID:          argument.id,
 			Label:       argumentLabel(argument),
 			Description: argument.help,
+			sensitive:   argument.sensitive,
 		})
 	}
 	for index := range command.options {
@@ -463,6 +474,7 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 			ID:          option.id,
 			Label:       optionLabel(option),
 			Description: optionDescription(option),
+			sensitive:   option.sensitive,
 			deprecation: option.deprecation,
 		})
 		for _, relation := range option.requires {
@@ -508,6 +520,7 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 				ID:            option.id,
 				Label:         optionLabel(option),
 				Description:   optionDescription(option),
+				sensitive:     option.sensitive,
 				deprecation:   option.deprecation,
 			})
 		}
