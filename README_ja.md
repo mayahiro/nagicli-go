@@ -38,6 +38,7 @@ go run ./examples/basic Nagi
 - Command単位の段階導入に使うparser-first dispatchとparsed Invocation実行
 - Handlerを含まないimmutable completion解決、dynamic provider、Bash、Zsh、Fish、PowerShell generator
 - 注入可能なI/Oを持つ任意の行指向Confirm、Select、Input、Secret
+- 注入可能なI/Oを持つ任意の同期TTY status、spinner、progress、plain-log fallback
 - `clitest` packageによるprocessなしのapplication test
 
 共有[CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)が観測可能な契約とRust parityを定義します
@@ -61,14 +62,15 @@ go test ./examples/basic
 | [段階導入](examples/staged/README.md) | `go run ./examples/staged inspect page` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [軽量prompt](examples/prompt/README.md) | `go run ./examples/prompt` |
+| [TTY-aware status](examples/status/README.md) | `go run ./examples/status` |
 
 全exampleは`go build ./...`の対象です
 
 ## 制約
 
-Shell固有生成と行指向Promptは任意packageです
+Shell固有生成、行指向Prompt、同期Status Reporterは任意packageです
 
-Completion installation、dynamic candidate I/O、credential管理、approval policyはApplicationが所有します
+Completion installation、dynamic candidate I/O、credential管理、approval policy、status更新時点、progressの意味はApplicationが所有します
 
 設定file読み込みとCLIからTUIへの統合は提供しません
 

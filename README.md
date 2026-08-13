@@ -41,6 +41,7 @@ go run ./examples/basic Nagi
 - Parser-first dispatch and parsed-Invocation execution for command-by-command adoption
 - Immutable handler-free completion resolution, dynamic providers, and Bash, Zsh, Fish, and PowerShell generators
 - Optional line-oriented Confirm, Select, Input, and Secret prompts with injected I/O
+- Optional synchronous TTY status, spinner, progress, and plain-log fallback with injected I/O
 - Process-free application tests through package `clitest`
 
 The shared [CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)
@@ -68,14 +69,16 @@ go test ./examples/basic
 | [Staged adoption](examples/staged/README.md) | `go run ./examples/staged inspect page` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [Lightweight prompts](examples/prompt/README.md) | `go run ./examples/prompt` |
+| [TTY-aware status](examples/status/README.md) | `go run ./examples/status` |
 
 All examples are included in `go build ./...`
 
 ## Limitations
 
-Shell-specific generation and line-oriented Prompt are optional, and
-applications own completion installation, dynamic candidate I/O, credential
-handling, and approval policy. Configuration-file loading and CLI-to-TUI
+Shell-specific generation, line-oriented Prompt, and synchronous Status
+Reporter are optional, and applications own completion installation, dynamic
+candidate I/O, credential handling, approval policy, status timing, and
+progress meaning. Configuration-file loading and CLI-to-TUI
 integration are not provided. Long-running handlers and completion
 providers must poll the injected cancellation context cooperatively. The
 portable graph does not model arbitrary invocation grammars. Help-only Usage
