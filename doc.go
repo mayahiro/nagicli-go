@@ -11,6 +11,9 @@
 // Help-only Usage Variants and SubcommandUsage control presentation without
 // changing parsing. InvocationValidator returns a structured Diagnostic with
 // application codes, option or argument targets, and remediation hints.
+// VisitHelpDocuments validates once and streams structured Help for every
+// visible command. Package document owns optional deterministic Markdown and
+// man rendering.
 //
 // OptionSpec.Sensitive and Argument.Sensitive attach generic presentation
 // metadata. Framework Help, parser Diagnostics, formatting, and completion

@@ -37,7 +37,7 @@ go run ./examples/basic Nagi
 - Command-local value IDs, exact stable-ID scopes, and fallible required typed access
 - Generic Hidden and Deprecated command and option lifecycle metadata with structured notices
 - Generic Sensitive Value metadata with Help, Diagnostic, formatting, and completion redaction
-- Structured deterministic Help, controllable subcommand Usage Variants, custom sections and renderers, and `help [COMMAND...]`
+- Structured deterministic Help, controllable subcommand Usage Variants, custom sections, whole-graph traversal, optional Markdown and man renderers, and `help [COMMAND...]`
 - Stable Diagnostic codes, categories, value targets, and hints with plain or stable JSON rendering and configurable exit-code mapping
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
 - Parser-first dispatch and parsed-Invocation execution for command-by-command adoption
@@ -73,6 +73,7 @@ go test ./examples/basic
 | [JSON Diagnostic](examples/json-diagnostic/README.md) | `go run ./examples/json-diagnostic` |
 | [Command lifecycle](examples/lifecycle/README.md) | `go run ./examples/lifecycle --legacy old` |
 | [Sensitive Value](examples/sensitive-values/README.md) | `go run ./examples/sensitive-values --token demo-token` |
+| [Derived Help documents](examples/documentation/README.md) | `go run ./examples/documentation markdown` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [Lightweight prompts](examples/prompt/README.md) | `go run ./examples/prompt` |
 | [TTY-aware status](examples/status/README.md) | `go run ./examples/status` |
@@ -81,8 +82,8 @@ All examples are included in `go build ./...`
 
 ## Limitations
 
-Shell-specific generation, line-oriented Prompt, and synchronous Status
-Reporter are optional, and applications own completion installation, dynamic
+Shell-specific generation, derived Help documents, line-oriented Prompt, and
+synchronous Status Reporter are optional, and applications own completion installation, dynamic
 candidate I/O, credential handling, approval policy, status timing, and
 progress meaning. Sensitive Value metadata redacts framework projections but
 does not zeroize memory or hide process arguments from the operating system or

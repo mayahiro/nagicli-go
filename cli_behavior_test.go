@@ -48,6 +48,64 @@ func TestParentOptionsAreNotRecognizedAfterChildSelection(t *testing.T) {
 	assertDiagnosticCode(t, err, cli.CodeUnknownOption)
 }
 
+func TestHelpDocumentsVisitVisiblePreorderAndStopEarly(t *testing.T) {
+	command := cli.NewCommand("root").
+		Subcommand(
+			cli.NewCommand("alpha").
+				Subcommand(cli.NewCommand("alpha-child")).
+				Subcommand(
+					cli.NewCommand("alpha-hidden").
+						Hidden().
+						Subcommand(cli.NewCommand("hidden-descendant")),
+				),
+		).
+		Subcommand(cli.NewCommand("beta"))
+
+	var paths []string
+	if err := command.VisitHelpDocuments(func(document cli.HelpDocument) bool {
+		paths = append(paths, strings.Join(document.CommandPath(), "/"))
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"root", "root/alpha", "root/alpha/alpha-child", "root/beta"}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+
+	var stopped []string
+	if err := command.VisitHelpDocuments(func(document cli.HelpDocument) bool {
+		stopped = append(stopped, strings.Join(document.CommandPath(), "/"))
+		return len(stopped) < 2
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"root", "root/alpha"}; !slices.Equal(stopped, want) {
+		t.Fatalf("stopped = %v, want %v", stopped, want)
+	}
+
+	err := command.VisitHelpDocuments(nil)
+	assertDiagnosticCode(t, err, cli.CodeInvalidSpecification)
+
+	direct, err := command.HelpDocument([]string{"root", "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visited cli.HelpDocument
+	if err := command.VisitHelpDocuments(func(document cli.HelpDocument) bool {
+		if slices.Equal(document.CommandPath(), []string{"root", "alpha"}) {
+			visited = document
+		}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	renderer := cli.PlainHelpRenderer{}
+	if got, want := renderer.RenderHelp(visited), renderer.RenderHelp(direct); got != want {
+		t.Fatalf("visited Help = %q, want %q", got, want)
+	}
+}
+
 func TestInheritedOptionsKeepDeclarationScopeValidation(t *testing.T) {
 	required := cli.NewCommand("root").
 		ID("root-id").

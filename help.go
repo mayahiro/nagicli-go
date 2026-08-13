@@ -419,6 +419,82 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 	}
 	commandIDPath := c.commandIDPathAtPath(path)
 	commandLineage := c.commandsAtPath(path)
+	return buildHelpDocument(c, command, path, commandIDPath, commandLineage), nil
+}
+
+// VisitHelpDocuments visits visible commands in definition-order preorder
+//
+// The graph is validated once before the first callback. The root is visited
+// first, hidden command subtrees are omitted, and returning false stops
+// traversal successfully. The Command Graph must not be mutated while this
+// synchronous traversal is active. A nil visitor returns an Invalid
+// Specification Diagnostic.
+func (c *Command) VisitHelpDocuments(visitor func(HelpDocument) bool) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if visitor == nil {
+		return NewDiagnostic(
+			CodeInvalidSpecification,
+			"help document visitor must not be nil",
+		)
+	}
+
+	path := []string{c.name}
+	commandIDPath := []string{c.id}
+	commandLineage := []*Command{c}
+	if !visitor(buildHelpDocument(c, c, path, commandIDPath, commandLineage)) {
+		return nil
+	}
+
+	type visitFrame struct {
+		command   *Command
+		nextChild int
+	}
+	stack := []visitFrame{{command: c}}
+	for len(stack) > 0 {
+		frame := &stack[len(stack)-1]
+		var child *Command
+		for frame.nextChild < len(frame.command.subcommands) {
+			candidate := frame.command.subcommands[frame.nextChild]
+			frame.nextChild++
+			if !candidate.hidden {
+				child = candidate
+				break
+			}
+		}
+		if child != nil {
+			path = append(path, child.name)
+			commandIDPath = append(commandIDPath, child.id)
+			commandLineage = append(commandLineage, child)
+			if !visitor(buildHelpDocument(
+				c,
+				child,
+				path,
+				commandIDPath,
+				commandLineage,
+			)) {
+				return nil
+			}
+			stack = append(stack, visitFrame{command: child})
+			continue
+		}
+
+		stack = stack[:len(stack)-1]
+		if len(stack) > 0 {
+			path = path[:len(path)-1]
+			commandIDPath = commandIDPath[:len(commandIDPath)-1]
+			commandLineage = commandLineage[:len(commandLineage)-1]
+		}
+	}
+	return nil
+}
+
+func buildHelpDocument(
+	root, command *Command,
+	path, commandIDPath []string,
+	commandLineage []*Command,
+) HelpDocument {
 
 	usageVariants := helpUsageVariants(command, path, commandIDPath)
 	usage := make([]string, 0, len(usageVariants))
@@ -449,7 +525,7 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 			deprecation: child.deprecation,
 		})
 	}
-	if command == c && hasVisibleSubcommand(command) {
+	if command == root && hasVisibleSubcommand(command) {
 		document.commands = append(document.commands, HelpEntry{
 			ID:          "help",
 			Label:       "help",
@@ -501,7 +577,7 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 		Label:       "-h, --help",
 		Description: "Print help",
 	})
-	if c.version != "" {
+	if root.version != "" {
 		document.options = append(document.options, HelpEntry{
 			ID:          "version",
 			Label:       "-V, --version",
@@ -557,7 +633,7 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 	for _, section := range command.helpSections {
 		document.sections = append(document.sections, cloneHelpSection(section))
 	}
-	return document, nil
+	return document
 }
 
 func helpUsageVariants(command *Command, path, commandIDPath []string) []HelpUsageVariant {

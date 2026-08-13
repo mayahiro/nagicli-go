@@ -34,7 +34,7 @@ go run ./examples/basic Nagi
 - Command-local value ID、stable IDによるexact scope、失敗理由を返すrequired typed access
 - Structured noticeを持つ汎用HiddenとDeprecatedのCommandとOption lifecycle metadata
 - Help、Diagnostic、formatting、completionをredactする汎用Sensitive Value metadata
-- Structured deterministic Help、制御可能なsubcommand Usage Variant、custom sectionとrenderer、`help [COMMAND...]`
+- Structured deterministic Help、制御可能なsubcommand Usage Variant、custom section、全graph traversal、任意のMarkdownとman renderer、`help [COMMAND...]`
 - 安定Diagnostic code、category、value target、hint、plainまたはstable JSON rendering、設定可能なexit-code mapping
 - 注入可能なstdin、stdout、stderr、environment、current directory、`context.Context` cancellation
 - Command単位の段階導入に使うparser-first dispatchとparsed Invocation実行
@@ -65,6 +65,7 @@ go test ./examples/basic
 | [JSON Diagnostic](examples/json-diagnostic/README.md) | `go run ./examples/json-diagnostic` |
 | [Command lifecycle](examples/lifecycle/README.md) | `go run ./examples/lifecycle --legacy old` |
 | [Sensitive Value](examples/sensitive-values/README.md) | `go run ./examples/sensitive-values --token demo-token` |
+| [Help派生document](examples/documentation/README.md) | `go run ./examples/documentation markdown` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [軽量prompt](examples/prompt/README.md) | `go run ./examples/prompt` |
 | [TTY-aware status](examples/status/README.md) | `go run ./examples/status` |
@@ -73,7 +74,7 @@ go test ./examples/basic
 
 ## 制約
 
-Shell固有生成、行指向Prompt、同期Status Reporterは任意packageです
+Shell固有生成、Help派生document、行指向Prompt、同期Status Reporterは任意packageです
 
 Completion installation、dynamic candidate I/O、credential管理、approval policy、status更新時点、progressの意味はApplicationが所有します
 
