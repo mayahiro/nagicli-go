@@ -154,6 +154,9 @@ func writeProtocol(shell Shell, candidates []cli.CompletionCandidate, output io.
 		if description == "" {
 			description = candidate.DisplayLabel()
 		}
+		if deprecation, ok := candidate.Deprecation(); ok {
+			description += " [deprecated: use " + deprecation.Replacement() + "]"
+		}
 		if shell == Fish {
 			if _, err := fmt.Fprintf(output, "%s\t%s\n", candidate.Value(), description); err != nil {
 				return err

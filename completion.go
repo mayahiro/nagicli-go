@@ -167,6 +167,7 @@ type CompletionCandidate struct {
 	value        string
 	displayLabel string
 	description  string
+	deprecation  Deprecation
 	kind         CompletionCandidateKind
 	appendSpace  bool
 }
@@ -222,6 +223,11 @@ func (c CompletionCandidate) DisplayLabel() string {
 // Description returns the optional short description
 func (c CompletionCandidate) Description() string { return c.description }
 
+// Deprecation returns replacement metadata for a deprecated static candidate
+func (c CompletionCandidate) Deprecation() (Deprecation, bool) {
+	return c.deprecation, c.deprecation.configured
+}
+
 // Kind returns the semantic candidate kind
 func (c CompletionCandidate) Kind() CompletionCandidateKind { return c.kind }
 
@@ -232,6 +238,11 @@ func (c CompletionCandidate) withValuePrefix(prefix string) CompletionCandidate 
 	if prefix != "" {
 		c.value = prefix + c.value
 	}
+	return c
+}
+
+func (c CompletionCandidate) withDeprecation(deprecation Deprecation) CompletionCandidate {
+	c.deprecation = deprecation
 	return c
 }
 
@@ -296,6 +307,8 @@ type completionEngineOption struct {
 	short          byte
 	kind           OptionKind
 	help           string
+	hidden         bool
+	deprecation    Deprecation
 	inherited      bool
 	repeated       bool
 	possibleValues []string
@@ -314,6 +327,8 @@ type completionEngineCommand struct {
 	name        string
 	aliases     []string
 	description string
+	hidden      bool
+	deprecation Deprecation
 	options     []completionEngineOption
 	arguments   []completionEngineArgument
 	subcommands []*completionEngineCommand
@@ -419,6 +434,8 @@ func snapshotCompletionCommand(command *Command, hasVersion bool) *completionEng
 		name:        command.name,
 		aliases:     append([]string(nil), command.aliases...),
 		description: command.about,
+		hidden:      command.hidden,
+		deprecation: command.deprecation,
 		hasVersion:  hasVersion,
 		options:     make([]completionEngineOption, len(command.options)),
 		arguments:   make([]completionEngineArgument, len(command.arguments)),
@@ -433,6 +450,8 @@ func snapshotCompletionCommand(command *Command, hasVersion bool) *completionEng
 			short:          option.short,
 			kind:           option.kind,
 			help:           option.help,
+			hidden:         option.hidden,
+			deprecation:    option.deprecation,
 			inherited:      option.inherited,
 			repeated:       option.repeated,
 			possibleValues: append([]string(nil), option.parser.PossibleValues()...),
@@ -746,7 +765,7 @@ func (s *completionState) resolve(current string) completionResolution {
 	var valueTarget *completionEngineArgument
 	if completingWord && s.optionsEnabled && !s.positionalStarted {
 		s.pushSubcommands(&candidates, current)
-		if len(s.commands) == 1 && len(s.root.subcommands) > 0 && strings.HasPrefix("help", current) {
+		if len(s.commands) == 1 && s.root.hasVisibleSubcommand() && strings.HasPrefix("help", current) {
 			candidates = append(candidates,
 				NewCompletionCandidate("help").
 					WithKind(CompletionCandidateCommand).
@@ -777,6 +796,15 @@ func (s *completionState) resolve(current string) completionResolution {
 		candidates:  candidates,
 		provider:    provider,
 	}
+}
+
+func (c *completionEngineCommand) hasVisibleSubcommand() bool {
+	for _, command := range c.subcommands {
+		if !command.hidden {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *completionState) attachedValueContext(current string) (int, int, string, string, bool) {
@@ -820,7 +848,11 @@ func (s *completionState) resolveOptionValue(
 	commandIDs := s.commandIDPath()
 	option := &s.commands[scopeIndex].options[optionIndex]
 	var candidates []CompletionCandidate
-	s.pushValues(&candidates, option.possibleValues, valuePrefix, prefix)
+	var provider CompletionProvider
+	if !option.hidden {
+		s.pushValues(&candidates, option.possibleValues, valuePrefix, prefix)
+		provider = option.provider
+	}
 	return completionResolution{
 		commandPath: append([]string(nil), s.commandPath...),
 		commandIDs:  commandIDs,
@@ -829,7 +861,7 @@ func (s *completionState) resolveOptionValue(
 		valuePrefix: valuePrefix,
 		partial:     s.partial,
 		candidates:  candidates,
-		provider:    option.provider,
+		provider:    provider,
 	}
 }
 
@@ -853,11 +885,15 @@ func (s *completionState) pushValues(
 
 func (s *completionState) pushSubcommands(candidates *[]CompletionCandidate, prefix string) {
 	for _, command := range s.active().subcommands {
+		if command.hidden {
+			continue
+		}
 		if strings.HasPrefix(command.name, prefix) {
 			*candidates = append(*candidates,
 				NewCompletionCandidate(command.name).
 					WithKind(CompletionCandidateCommand).
-					WithDescription(command.description),
+					WithDescription(command.description).
+					withDeprecation(command.deprecation),
 			)
 		}
 		for _, alias := range command.aliases {
@@ -865,7 +901,8 @@ func (s *completionState) pushSubcommands(candidates *[]CompletionCandidate, pre
 				*candidates = append(*candidates,
 					NewCompletionCandidate(alias).
 						WithKind(CompletionCandidateCommand).
-						WithDescription(command.description),
+						WithDescription(command.description).
+						withDeprecation(command.deprecation),
 				)
 			}
 		}
@@ -880,6 +917,9 @@ func (s *completionState) pushOptions(candidates *[]CompletionCandidate, prefix 
 			if scopeIndex != active && !option.inherited {
 				continue
 			}
+			if option.hidden {
+				continue
+			}
 			if option.kind != OptionCount && !option.repeated && s.optionSeen(scopeIndex, option) {
 				continue
 			}
@@ -887,14 +927,16 @@ func (s *completionState) pushOptions(candidates *[]CompletionCandidate, prefix 
 				*candidates = append(*candidates,
 					NewCompletionCandidate("--"+option.long).
 						WithKind(CompletionCandidateOption).
-						WithDescription(option.help),
+						WithDescription(option.help).
+						withDeprecation(option.deprecation),
 				)
 			}
 			if option.short != 0 && completionShortStartsWith(option.short, prefix) {
 				*candidates = append(*candidates,
 					NewCompletionCandidate(fmt.Sprintf("-%c", option.short)).
 						WithKind(CompletionCandidateOption).
-						WithDescription(option.help),
+						WithDescription(option.help).
+						withDeprecation(option.deprecation),
 				)
 			}
 		}

@@ -76,6 +76,30 @@ func TestProtocolHandlesStaticAndDynamicCandidates(t *testing.T) {
 	}
 }
 
+func TestProtocolDecoratesDeprecatedStaticCandidates(t *testing.T) {
+	engine, err := cli.NewCompletionEngine(
+		cli.NewCommand("qed").
+			Subcommand(cli.NewCommand("old").About("Old command").Deprecated("run")).
+			Subcommand(cli.NewCommand("run")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	handled, err := completion.Handle(
+		context.Background(),
+		engine,
+		[]string{completion.ProtocolToken, "bash", "o"},
+		&output,
+	)
+	if err != nil || !handled {
+		t.Fatalf("handled=%t error=%v", handled, err)
+	}
+	if got, want := output.String(), "old\told\tOld command [deprecated: use run]\tcommand\tspace\n"; got != want {
+		t.Fatalf("protocol = %q, want %q", got, want)
+	}
+}
+
 func TestProtocolPassThroughAndErrors(t *testing.T) {
 	engine := completionEngine(t, nil)
 	var output bytes.Buffer

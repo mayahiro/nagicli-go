@@ -13,9 +13,13 @@ const (
 	benchmarkOptionsPerBranch  = 8
 )
 
-func benchmarkInheritedCommand(unrelatedBranches int) *cli.Command {
+func benchmarkInheritedCommand(unrelatedBranches int, deprecated bool) *cli.Command {
+	verbose := cli.Count("verbose").Long("verbose").Inherited()
+	if deprecated {
+		verbose.Deprecated("--log-level")
+	}
 	root := cli.NewCommand("root").
-		Option(cli.Count("verbose").Long("verbose").Inherited()).
+		Option(verbose).
 		Subcommand(cli.NewCommand("run"))
 	for branchIndex := range unrelatedBranches {
 		branch := cli.NewCommand(fmt.Sprintf("branch-%d", branchIndex))
@@ -37,8 +41,8 @@ func benchmarkInheritedArguments() []string {
 	return arguments
 }
 
-func benchmarkInheritedOptions(b *testing.B, unrelatedBranches int) {
-	command := benchmarkInheritedCommand(unrelatedBranches)
+func benchmarkInheritedOptions(b *testing.B, unrelatedBranches int, deprecated bool) {
+	command := benchmarkInheritedCommand(unrelatedBranches, deprecated)
 	arguments := benchmarkInheritedArguments()
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -55,9 +59,13 @@ func benchmarkInheritedOptions(b *testing.B, unrelatedBranches int) {
 }
 
 func BenchmarkInheritedOptionsSelectedPath(b *testing.B) {
-	benchmarkInheritedOptions(b, 0)
+	benchmarkInheritedOptions(b, 0, false)
 }
 
 func BenchmarkInheritedOptions100UnrelatedBranches(b *testing.B) {
-	benchmarkInheritedOptions(b, benchmarkUnrelatedBranches)
+	benchmarkInheritedOptions(b, benchmarkUnrelatedBranches, false)
+}
+
+func BenchmarkDeprecatedOption1000Occurrences(b *testing.B) {
+	benchmarkInheritedOptions(b, 0, true)
 }

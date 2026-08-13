@@ -108,9 +108,10 @@ func (r PlainDiagnosticRenderer) RenderDiagnostic(diagnostic *Diagnostic) string
 
 // RuntimePolicy selects rendering and category-to-status mapping
 type RuntimePolicy struct {
-	exitCodes          ExitCodePolicy
-	helpRenderer       HelpRenderer
-	diagnosticRenderer DiagnosticRenderer
+	exitCodes                 ExitCodePolicy
+	helpRenderer              HelpRenderer
+	diagnosticRenderer        DiagnosticRenderer
+	deprecationNoticeRenderer DeprecationNoticeRenderer
 }
 
 // DefaultRuntimePolicy returns deterministic Nagi runtime behavior
@@ -140,6 +141,22 @@ func (p RuntimePolicy) WithDiagnosticRenderer(renderer DiagnosticRenderer) Runti
 	return p
 }
 
+// WithDeprecationNoticeRenderer returns a copy that renders Invocation
+// deprecation notices before handler execution
+func (p RuntimePolicy) WithDeprecationNoticeRenderer(
+	renderer DeprecationNoticeRenderer,
+) RuntimePolicy {
+	p.deprecationNoticeRenderer = renderer
+	return p
+}
+
+// WithoutDeprecationNoticeRenderer returns a copy without automatic
+// deprecation notice output
+func (p RuntimePolicy) WithoutDeprecationNoticeRenderer() RuntimePolicy {
+	p.deprecationNoticeRenderer = nil
+	return p
+}
+
 // ExitCodePolicy returns the configured category-to-status mapping
 func (p RuntimePolicy) ExitCodePolicy() ExitCodePolicy {
 	return p.normalized().exitCodes
@@ -153,6 +170,15 @@ func (p RuntimePolicy) RenderHelp(document HelpDocument) string {
 // RenderDiagnostic renders one Diagnostic without writing to process output
 func (p RuntimePolicy) RenderDiagnostic(diagnostic *Diagnostic) string {
 	return p.normalized().diagnosticRenderer.RenderDiagnostic(diagnostic)
+}
+
+// RenderDeprecationNotice renders one notice when notice output is enabled
+func (p RuntimePolicy) RenderDeprecationNotice(notice DeprecationNotice) (string, bool) {
+	renderer := p.normalized().deprecationNoticeRenderer
+	if renderer == nil {
+		return "", false
+	}
+	return renderer.RenderDeprecationNotice(notice), true
 }
 
 // StatusForDiagnostic returns the configured process status for one Diagnostic

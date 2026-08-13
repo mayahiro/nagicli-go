@@ -53,3 +53,37 @@ func BenchmarkCompletionSelectedPath(b *testing.B) {
 func BenchmarkCompletion100UnrelatedBranches(b *testing.B) {
 	benchmarkCompletion(b, benchmarkUnrelatedBranches)
 }
+
+func benchmarkHiddenCompletion(b *testing.B, pairs int) {
+	root := cli.NewCommand("root")
+	for index := range pairs {
+		root.
+			Option(cli.Flag(fmt.Sprintf("hidden-option-%d", index)).Long(fmt.Sprintf("hidden-option-%d", index)).Hidden()).
+			Subcommand(cli.NewCommand(fmt.Sprintf("hidden-command-%d", index)).Hidden())
+	}
+	engine, err := cli.NewCompletionEngine(root)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	input := cli.NewCompletionInput(nil, "")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		result, completionErr := engine.Complete(ctx, input)
+		if completionErr != nil {
+			b.Fatal(completionErr)
+		}
+		if candidates := result.Candidates(); len(candidates) != 2 {
+			b.Fatalf("candidates = %+v", candidates)
+		}
+	}
+}
+
+func BenchmarkCompletionNoVisibleDeclarations(b *testing.B) {
+	benchmarkHiddenCompletion(b, 0)
+}
+
+func BenchmarkCompletion1000HiddenPairs(b *testing.B) {
+	benchmarkHiddenCompletion(b, 1_000)
+}

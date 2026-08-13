@@ -1,7 +1,8 @@
 .PHONY: bench build check format format-check lint test
 
 bench:
-	GOTOOLCHAIN=local go test -run '^$$' -bench '^Benchmark(InheritedOptions|Completion)(SelectedPath|100UnrelatedBranches)$$' -benchmem -benchtime=100x -count=3 .
+	GOTOOLCHAIN=local go test -run '^$$' -bench '^(BenchmarkInheritedOptions(SelectedPath|100UnrelatedBranches)|BenchmarkDeprecatedOption1000Occurrences)$$' -benchmem -benchtime=1000x -count=3 .
+	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkCompletion(SelectedPath|100UnrelatedBranches|NoVisibleDeclarations|1000HiddenPairs)$$' -benchmem -benchtime=10000x -count=3 .
 	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkJSONDiagnosticRenderer$$' -benchmem -benchtime=100x -count=3 .
 	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkPrompt(Confirm|Input64KiB)$$' -benchmem -benchtime=100x -count=3 ./prompt
 	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkStatus(TerminalUpdate|LogCoalesced)$$' -benchmem -benchtime=10000x -count=3 ./status

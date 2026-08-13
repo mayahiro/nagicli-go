@@ -40,10 +40,11 @@ type InvocationScope struct {
 // Validators temporarily use their defining Command as current; handlers and
 // returned Invocations use the selected leaf
 type Invocation struct {
-	commandPath   []string
-	commandIDPath []string
-	scopes        []invocationScopeData
-	currentScope  int
+	commandPath        []string
+	commandIDPath      []string
+	scopes             []invocationScopeData
+	currentScope       int
+	deprecationNotices []DeprecationNotice
 }
 
 // CommandPath returns a copy of the canonical root-to-leaf path
@@ -54,6 +55,20 @@ func (i *Invocation) CommandPath() []string {
 // CommandIDPath returns a copy of the stable root-to-leaf command-ID path
 func (i *Invocation) CommandIDPath() []string {
 	return append([]string(nil), i.commandIDPath...)
+}
+
+// DeprecationNotices returns deprecated Command and Option uses in
+// deterministic first-use order
+//
+// A deprecated root Command comes first. Subsequent targets follow their first
+// successful argv occurrence. Each stable target occurs at most once.
+// Environment and default value resolution do not produce notices
+func (i *Invocation) DeprecationNotices() []DeprecationNotice {
+	notices := make([]DeprecationNotice, len(i.deprecationNotices))
+	for index, notice := range i.deprecationNotices {
+		notices[index] = cloneDeprecationNotice(notice)
+	}
+	return notices
 }
 
 // ValueScopeIDPath returns the current stable path where unqualified lookup
@@ -368,20 +383,29 @@ func (c *Command) ParseWithEnvironment(arguments []string, environment map[strin
 		scopes:         []invocationScopeData{newInvocationScopeData(c)},
 		optionsEnabled: true,
 	}
+	if c.deprecation.configured {
+		parser.pushDeprecationNotice(commandDeprecationNotice(
+			[]string{c.name},
+			[]string{c.id},
+			c.name,
+			c.deprecation,
+		))
+	}
 	return parser.parse()
 }
 
 type argumentParser struct {
-	root              *Command
-	arguments         []string
-	environment       map[string]string
-	index             int
-	commands          []*Command
-	commandPath       []string
-	scopes            []invocationScopeData
-	positionalIndex   int
-	positionalStarted bool
-	optionsEnabled    bool
+	root               *Command
+	arguments          []string
+	environment        map[string]string
+	index              int
+	commands           []*Command
+	commandPath        []string
+	scopes             []invocationScopeData
+	positionalIndex    int
+	positionalStarted  bool
+	optionsEnabled     bool
+	deprecationNotices []DeprecationNotice
 }
 
 func (p *argumentParser) parse() (ParseResult, error) {
@@ -420,10 +444,11 @@ func (p *argumentParser) parse() (ParseResult, error) {
 		return ParseResult{}, err
 	}
 	invocation := &Invocation{
-		commandPath:   append([]string(nil), p.commandPath...),
-		commandIDPath: make([]string, len(p.commands)),
-		scopes:        p.scopes,
-		currentScope:  len(p.scopes) - 1,
+		commandPath:        append([]string(nil), p.commandPath...),
+		commandIDPath:      make([]string, len(p.commands)),
+		scopes:             p.scopes,
+		currentScope:       len(p.scopes) - 1,
+		deprecationNotices: p.deprecationNotices,
 	}
 	for index, command := range p.commands {
 		invocation.commandIDPath[index] = command.id
@@ -541,8 +566,18 @@ func (p *argumentParser) parseLong(argument string) (ParseResult, bool, error) {
 	if hasAttached {
 		value = &attached
 	}
-	if err := p.applyOption(scopeIndex, option, value); err != nil {
+	firstOccurrence, err := p.applyOption(scopeIndex, option, value)
+	if err != nil {
 		return ParseResult{}, false, err
+	}
+	if firstOccurrence && option.deprecation.configured {
+		p.pushDeprecationNotice(optionDeprecationNotice(
+			p.commandPath,
+			p.commandIDPath(scopeIndex),
+			option.id,
+			"--"+name,
+			option.deprecation,
+		))
 	}
 	return ParseResult{}, false, nil
 }
@@ -579,19 +614,31 @@ func (p *argumentParser) parseShort(argument string) (ParseResult, bool, error) 
 				value := argument[offset+1:]
 				attached = &value
 			}
-			if err := p.applyOption(scopeIndex, option, attached); err != nil {
+			firstOccurrence, err := p.applyOption(scopeIndex, option, attached)
+			if err != nil {
 				return ParseResult{}, false, err
+			}
+			if firstOccurrence && option.deprecation.configured {
+				p.recordOptionDeprecation(scopeIndex, option, fmt.Sprintf("-%c", short))
 			}
 			return ParseResult{}, false, nil
 		}
-		if err := p.applyOption(scopeIndex, option, nil); err != nil {
+		firstOccurrence, err := p.applyOption(scopeIndex, option, nil)
+		if err != nil {
 			return ParseResult{}, false, err
+		}
+		if firstOccurrence && option.deprecation.configured {
+			p.recordOptionDeprecation(scopeIndex, option, fmt.Sprintf("-%c", short))
 		}
 	}
 	return ParseResult{}, false, nil
 }
 
-func (p *argumentParser) applyOption(scopeIndex int, option *OptionSpec, attached *string) error {
+func (p *argumentParser) applyOption(
+	scopeIndex int,
+	option *OptionSpec,
+	attached *string,
+) (bool, error) {
 	values := p.scopes[scopeIndex].values
 	target := func() DiagnosticTarget {
 		return OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(scopeIndex)...)
@@ -599,42 +646,44 @@ func (p *argumentParser) applyOption(scopeIndex int, option *OptionSpec, attache
 	switch option.kind {
 	case OptionFlag:
 		if attached != nil {
-			return p.diagTargets(
+			return false, p.diagTargets(
 				CodeUnexpectedOptionValue,
 				fmt.Sprintf("option %q does not take a value", optionDisplay(option)),
 				target(),
 			)
 		}
 		if _, duplicate := values[option.id]; duplicate {
-			return p.diagTargets(
+			return false, p.diagTargets(
 				CodeDuplicateOption,
 				fmt.Sprintf("option %q was provided more than once", optionDisplay(option)),
 				target(),
 			)
 		}
 		values[option.id] = invocationValue{kind: OptionFlag, flag: true, supplied: true}
+		return true, nil
 	case OptionCount:
 		if attached != nil {
-			return p.diagTargets(
+			return false, p.diagTargets(
 				CodeUnexpectedOptionValue,
 				fmt.Sprintf("option %q does not take a value", optionDisplay(option)),
 				target(),
 			)
 		}
-		value := values[option.id]
+		value, duplicate := values[option.id]
 		value.kind = OptionCount
 		value.supplied = true
 		if value.count != math.MaxUint64 {
 			value.count++
 		}
 		values[option.id] = value
+		return !duplicate, nil
 	case OptionValue:
 		var raw string
 		if attached != nil {
 			raw = *attached
 		} else {
 			if p.index >= len(p.arguments) {
-				return p.diagTargets(
+				return false, p.diagTargets(
 					CodeMissingOptionValue,
 					fmt.Sprintf("option %q requires a value", optionDisplay(option)),
 					target(),
@@ -644,12 +693,13 @@ func (p *argumentParser) applyOption(scopeIndex int, option *OptionSpec, attache
 			p.index++
 		}
 		if _, duplicate := values[option.id]; duplicate && !option.repeated {
-			return p.diagTargets(
+			return false, p.diagTargets(
 				CodeDuplicateOption,
 				fmt.Sprintf("option %q was provided more than once", optionDisplay(option)),
 				target(),
 			)
 		}
+		_, duplicate := values[option.id]
 		value, err := p.parseValue(
 			option.id,
 			option.parser,
@@ -658,11 +708,12 @@ func (p *argumentParser) applyOption(scopeIndex int, option *OptionSpec, attache
 			target(),
 		)
 		if err != nil {
-			return err
+			return false, err
 		}
 		p.pushValue(scopeIndex, option.id, value, option.repeated)
+		return !duplicate, nil
 	}
-	return nil
+	return false, nil
 }
 
 func (p *argumentParser) visibleLongOption(name string) (int, *OptionSpec) {
@@ -701,6 +752,7 @@ func (p *argumentParser) selectSubcommand(argument string) bool {
 			p.scopes = append(p.scopes, newInvocationScopeData(command))
 			p.positionalIndex = 0
 			p.positionalStarted = false
+			p.recordCommandDeprecation(command, argument)
 			return true
 		}
 		for _, alias := range command.aliases {
@@ -710,11 +762,51 @@ func (p *argumentParser) selectSubcommand(argument string) bool {
 				p.scopes = append(p.scopes, newInvocationScopeData(command))
 				p.positionalIndex = 0
 				p.positionalStarted = false
+				p.recordCommandDeprecation(command, argument)
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func (p *argumentParser) recordCommandDeprecation(command *Command, spelling string) {
+	if !command.deprecation.configured {
+		return
+	}
+	p.pushDeprecationNotice(commandDeprecationNotice(
+		p.commandPath,
+		p.currentCommandIDPath(),
+		spelling,
+		command.deprecation,
+	))
+}
+
+func (p *argumentParser) recordOptionDeprecation(
+	scopeIndex int,
+	option *OptionSpec,
+	spelling string,
+) {
+	if !option.deprecation.configured {
+		return
+	}
+	p.pushDeprecationNotice(optionDeprecationNotice(
+		p.commandPath,
+		p.commandIDPath(scopeIndex),
+		option.id,
+		spelling,
+		option.deprecation,
+	))
+}
+
+func (p *argumentParser) pushDeprecationNotice(notice DeprecationNotice) {
+	p.deprecationNotices = append(p.deprecationNotices, notice)
+}
+
+func cloneDeprecationNotice(notice DeprecationNotice) DeprecationNotice {
+	notice.commandPath = append([]string(nil), notice.commandPath...)
+	notice.commandIDPath = append([]string(nil), notice.commandIDPath...)
+	return notice
 }
 
 func (p *argumentParser) parsePositional(raw string) error {

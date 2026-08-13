@@ -32,6 +32,7 @@ go run ./examples/basic Nagi
 - Raw byte string、UTF-8 string、signed 64-bit integer、finite value、custom typed parser
 - Source-aware option relation、4種類のportable option-group rule、typed Invocation validator
 - Command-local value ID、stable IDによるexact scope、失敗理由を返すrequired typed access
+- Structured noticeを持つ汎用HiddenとDeprecatedのCommandとOption lifecycle metadata
 - Structured deterministic Help、制御可能なsubcommand Usage Variant、custom sectionとrenderer、`help [COMMAND...]`
 - 安定Diagnostic code、category、value target、hint、plainまたはstable JSON rendering、設定可能なexit-code mapping
 - 注入可能なstdin、stdout、stderr、environment、current directory、`context.Context` cancellation
@@ -43,7 +44,7 @@ go run ./examples/basic Nagi
 
 共有[CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)が観測可能な契約とRust parityを定義します
 
-[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)では継承Option、command-local scope、completion、Help presentation、structured validator、段階導入を説明します
+[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)では継承Option、command-local scope、completion、Help presentation、lifecycle metadata、structured validator、段階導入を説明します
 
 ## Application test
 
@@ -61,6 +62,7 @@ go test ./examples/basic
 | [Nested subcommands](examples/subcommands/README.md) | `go run ./examples/subcommands start -vv` |
 | [段階導入](examples/staged/README.md) | `go run ./examples/staged inspect page` |
 | [JSON Diagnostic](examples/json-diagnostic/README.md) | `go run ./examples/json-diagnostic` |
+| [Command lifecycle](examples/lifecycle/README.md) | `go run ./examples/lifecycle --legacy old` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [軽量prompt](examples/prompt/README.md) | `go run ./examples/prompt` |
 | [TTY-aware status](examples/status/README.md) | `go run ./examples/status` |

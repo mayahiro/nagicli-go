@@ -55,6 +55,8 @@ type OptionSpec struct {
 	kind        OptionKind
 	parser      ValueParser
 	help        string
+	hidden      bool
+	deprecation Deprecation
 	inherited   bool
 	required    bool
 	repeated    bool
@@ -89,6 +91,17 @@ func (o *OptionSpec) Short(name byte) *OptionSpec { o.short = name; return o }
 
 // Help sets the option description
 func (o *OptionSpec) Help(help string) *OptionSpec { o.help = help; return o }
+
+// Hidden omits this option from Help, completion, and derived documentation
+// while preserving explicit argv parsing
+func (o *OptionSpec) Hidden() *OptionSpec { o.hidden = true; return o }
+
+// Deprecated marks this option deprecated with an application-provided
+// replacement hint while preserving parsing
+func (o *OptionSpec) Deprecated(replacement string) *OptionSpec {
+	o.deprecation = newDeprecation(replacement)
+	return o
+}
 
 // Inherited makes this option visible in its declaring command and selected
 // descendants. Recognition continues after subcommand selection and
@@ -165,6 +178,14 @@ func (o *OptionSpec) Kind() OptionKind { return o.kind }
 // IsInherited reports whether this option is visible in selected descendant
 // commands.
 func (o *OptionSpec) IsInherited() bool { return o.inherited }
+
+// IsHidden reports whether this option is omitted from generated projections
+func (o *OptionSpec) IsHidden() bool { return o.hidden }
+
+// Deprecation returns replacement metadata when this option is deprecated
+func (o *OptionSpec) Deprecation() (Deprecation, bool) {
+	return o.deprecation, o.deprecation.configured
+}
 
 // Argument defines one positional command value
 type Argument struct {
@@ -286,6 +307,8 @@ type Command struct {
 	name               string
 	aliases            []string
 	about              string
+	hidden             bool
+	deprecation        Deprecation
 	version            string
 	options            []OptionSpec
 	arguments          []Argument
@@ -318,6 +341,17 @@ func (c *Command) Alias(alias string) *Command {
 
 // About sets the short command description
 func (c *Command) About(about string) *Command { c.about = about; return c }
+
+// Hidden omits this command from parent Help, completion, and derived
+// documentation while preserving explicit selection and direct Help
+func (c *Command) Hidden() *Command { c.hidden = true; return c }
+
+// Deprecated marks this command deprecated with an application-provided
+// replacement hint while preserving parsing and handler execution
+func (c *Command) Deprecated(replacement string) *Command {
+	c.deprecation = newDeprecation(replacement)
+	return c
+}
 
 // Version sets the root version used by the built-in version action
 func (c *Command) Version(version string) *Command { c.version = version; return c }
@@ -418,6 +452,14 @@ func (c *Command) Name() string { return c.name }
 // Description returns the short description
 func (c *Command) Description() string { return c.about }
 
+// IsHidden reports whether this command is omitted from parent projections
+func (c *Command) IsHidden() bool { return c.hidden }
+
+// Deprecation returns replacement metadata when this command is deprecated
+func (c *Command) Deprecation() (Deprecation, bool) {
+	return c.deprecation, c.deprecation.configured
+}
+
 // Validate checks the entire Command Graph before argv is consumed
 func (c *Command) Validate() error {
 	return validateCommandWithInherited(
@@ -444,6 +486,10 @@ func validateCommandWithInherited(
 	}
 	if !validName(command.name) || reservedLong(command.name) {
 		return invalidSpec("invalid or reserved command name %q", command.name)
+	}
+	if command.deprecation.configured &&
+		!validDeprecationReplacement(command.deprecation.replacement) {
+		return invalidSpec("command %q has an invalid deprecation replacement", command.name)
 	}
 	if !utf8.ValidString(command.about) {
 		return invalidSpec("command %q has an invalid UTF-8 description", command.name)
@@ -475,6 +521,10 @@ func validateCommandWithInherited(
 		localIDs[option.id] = struct{}{}
 		if option.long == "" && option.short == 0 {
 			return invalidSpec("option %q has no spelling", option.id)
+		}
+		if option.deprecation.configured &&
+			!validDeprecationReplacement(option.deprecation.replacement) {
+			return invalidSpec("option %q has an invalid deprecation replacement", option.id)
 		}
 		if option.long != "" {
 			if !validName(option.long) || reservedLong(option.long) || has(longs, option.long) {

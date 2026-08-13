@@ -223,6 +223,16 @@ func (c *Command) RunInvocationWithPolicy(
 	if context.cancellation.Err() != nil {
 		return NewOutcome(policy.exitCodes.StatusFor(CategoryCancellation)), nil
 	}
+	if policy.deprecationNoticeRenderer != nil {
+		for _, notice := range invocation.deprecationNotices {
+			if err := writeString(
+				context.stderr,
+				policy.deprecationNoticeRenderer.RenderDeprecationNotice(notice),
+			); err != nil {
+				return Outcome{}, err
+			}
+		}
+	}
 	command := c.commandAtPath(invocation.CommandPath())
 	if command == nil {
 		return Outcome{}, errors.New("nagi cli: validated invocation has no command")
