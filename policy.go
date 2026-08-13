@@ -100,7 +100,7 @@ func (r PlainDiagnosticRenderer) RenderDiagnostic(diagnostic *Diagnostic) string
 	for _, hint := range diagnostic.hints {
 		result += "hint: " + hint + "\n"
 	}
-	if r.showUsage && diagnostic.usage != "" {
+	if r.showUsage && diagnostic.usageSet {
 		result += "usage: " + diagnostic.usage + "\n"
 	}
 	return result

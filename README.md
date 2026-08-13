@@ -36,7 +36,7 @@ go run ./examples/basic Nagi
 - Source-aware option relations, four portable option-group rules, and typed Invocation validators
 - Command-local value IDs, exact stable-ID scopes, and fallible required typed access
 - Structured deterministic Help, controllable subcommand Usage Variants, custom sections and renderers, and `help [COMMAND...]`
-- Stable Diagnostic codes, categories, value targets, and hints with configurable rendering and exit-code mapping
+- Stable Diagnostic codes, categories, value targets, and hints with plain or stable JSON rendering and configurable exit-code mapping
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
 - Parser-first dispatch and parsed-Invocation execution for command-by-command adoption
 - Immutable handler-free completion resolution, dynamic providers, and Bash, Zsh, Fish, and PowerShell generators
@@ -67,6 +67,7 @@ go test ./examples/basic
 | [Basic command](examples/basic/README.md) | `go run ./examples/basic Nagi` |
 | [Nested subcommands](examples/subcommands/README.md) | `go run ./examples/subcommands start -vv` |
 | [Staged adoption](examples/staged/README.md) | `go run ./examples/staged inspect page` |
+| [JSON Diagnostic](examples/json-diagnostic/README.md) | `go run ./examples/json-diagnostic` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [Lightweight prompts](examples/prompt/README.md) | `go run ./examples/prompt` |
 | [TTY-aware status](examples/status/README.md) | `go run ./examples/status` |

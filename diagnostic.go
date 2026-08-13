@@ -130,6 +130,7 @@ type Diagnostic struct {
 	message     string
 	commandPath []string
 	usage       string
+	usageSet    bool
 	targets     []DiagnosticTarget
 	hints       []string
 }
@@ -151,9 +152,11 @@ func (d *Diagnostic) WithCommandPath(path []string) *Diagnostic {
 	return d
 }
 
-// WithUsage sets one usage line without the usage prefix and returns the receiver
+// WithUsage sets one present usage line without the usage prefix and returns
+// the receiver. An empty string remains present
 func (d *Diagnostic) WithUsage(usage string) *Diagnostic {
 	d.usage = usage
+	d.usageSet = true
 	return d
 }
 
@@ -185,8 +188,13 @@ func (d *Diagnostic) CommandPath() []string {
 	return append([]string(nil), d.commandPath...)
 }
 
-// Usage returns one usage line without the prefix
+// Usage returns one usage line without the prefix. It returns an empty string
+// for both absent usage and explicitly present empty usage; UsageValue
+// distinguishes those states
 func (d *Diagnostic) Usage() string { return d.usage }
+
+// UsageValue returns the usage line and whether it is present
+func (d *Diagnostic) UsageValue() (string, bool) { return d.usage, d.usageSet }
 
 // Targets returns structured option and argument targets in insertion order
 func (d *Diagnostic) Targets() []DiagnosticTarget {

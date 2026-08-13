@@ -33,7 +33,7 @@ go run ./examples/basic Nagi
 - Source-aware option relation、4種類のportable option-group rule、typed Invocation validator
 - Command-local value ID、stable IDによるexact scope、失敗理由を返すrequired typed access
 - Structured deterministic Help、制御可能なsubcommand Usage Variant、custom sectionとrenderer、`help [COMMAND...]`
-- 安定Diagnostic code、category、value target、hint、設定可能なrenderingとexit-code mapping
+- 安定Diagnostic code、category、value target、hint、plainまたはstable JSON rendering、設定可能なexit-code mapping
 - 注入可能なstdin、stdout、stderr、environment、current directory、`context.Context` cancellation
 - Command単位の段階導入に使うparser-first dispatchとparsed Invocation実行
 - Handlerを含まないimmutable completion解決、dynamic provider、Bash、Zsh、Fish、PowerShell generator
@@ -60,6 +60,7 @@ go test ./examples/basic
 | [Basic command](examples/basic/README.md) | `go run ./examples/basic Nagi` |
 | [Nested subcommands](examples/subcommands/README.md) | `go run ./examples/subcommands start -vv` |
 | [段階導入](examples/staged/README.md) | `go run ./examples/staged inspect page` |
+| [JSON Diagnostic](examples/json-diagnostic/README.md) | `go run ./examples/json-diagnostic` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [軽量prompt](examples/prompt/README.md) | `go run ./examples/prompt` |
 | [TTY-aware status](examples/status/README.md) | `go run ./examples/status` |
