@@ -37,6 +37,7 @@ go run ./examples/basic Nagi
 - Command-local value IDs, exact stable-ID scopes, and fallible required typed access
 - Generic Hidden and Deprecated command and option lifecycle metadata with structured notices
 - Generic Sensitive Value metadata with Help, Diagnostic, formatting, and completion redaction
+- Application-owned Value Source adapters with fixed command-line, environment, external, and default precedence
 - Structured deterministic Help, controllable subcommand Usage Variants, custom sections, whole-graph traversal, optional Markdown and man renderers, and `help [COMMAND...]`
 - Stable Diagnostic codes, categories, value targets, and hints with plain or stable JSON rendering and configurable exit-code mapping
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
@@ -49,9 +50,9 @@ go run ./examples/basic Nagi
 The shared [CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)
 define the observable contract and Rust parity. The
 [public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API.md)
-explains inherited options, command-local scopes, completion, Help
-presentation, lifecycle and Sensitive Value metadata, structured validators,
-and staged adoption
+explains inherited options, command-local scopes, Value Source adapters,
+completion, Help presentation, lifecycle and Sensitive Value metadata,
+structured validators, and staged adoption
 
 ## Testing applications
 
@@ -73,6 +74,7 @@ go test ./examples/basic
 | [JSON Diagnostic](examples/json-diagnostic/README.md) | `go run ./examples/json-diagnostic` |
 | [Command lifecycle](examples/lifecycle/README.md) | `go run ./examples/lifecycle --legacy old` |
 | [Sensitive Value](examples/sensitive-values/README.md) | `go run ./examples/sensitive-values --token demo-token` |
+| [Value Source Adapter](examples/value-sources/README.md) | `go run ./examples/value-sources` |
 | [Derived Help documents](examples/documentation/README.md) | `go run ./examples/documentation markdown` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [Lightweight prompts](examples/prompt/README.md) | `go run ./examples/prompt` |
@@ -87,8 +89,9 @@ synchronous Status Reporter are optional, and applications own completion instal
 candidate I/O, credential handling, approval policy, status timing, and
 progress meaning. Sensitive Value metadata redacts framework projections but
 does not zeroize memory or hide process arguments from the operating system or
-shell history. Configuration-file loading and CLI-to-TUI
-integration are not provided. Long-running handlers and completion
+shell history. Already loaded configuration can be mapped through a Value
+Resolver, but configuration-file loading and CLI-to-TUI integration are not
+provided. Long-running handlers and completion
 providers must poll the injected cancellation context cooperatively. The
 portable graph does not model arbitrary invocation grammars. Help-only Usage
 Variants can document validator-backed forms without changing parser semantics

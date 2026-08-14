@@ -75,6 +75,33 @@ func TestDriverUsesRuntimePolicy(t *testing.T) {
 	}
 }
 
+func TestDriverInjectsValueResolver(t *testing.T) {
+	command := cli.NewCommand("sample").
+		Option(cli.ValueOption("profile").Long("profile")).
+		Handle(func(_ *cli.Context, invocation *cli.Invocation) (cli.Outcome, error) {
+			values := invocation.ParsedValues("profile")
+			if len(values) != 1 || values[0].Raw() != "workspace" || values[0].Source() != cli.SourceExternal {
+				t.Fatalf("values = %+v", values)
+			}
+			identity, present := values[0].Origin().Identity()
+			if !present || identity != "test-config" {
+				t.Fatalf("origin = %q, %t", identity, present)
+			}
+			return cli.Success(), nil
+		})
+	result, err := clitest.New(command).
+		ValueResolver(func(cli.ValueResolutionRequest) (cli.ValueResolution, *cli.Diagnostic) {
+			return cli.ReplaceValueResolution("test-config", "workspace"), nil
+		}).
+		Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status() != cli.StatusSuccess {
+		t.Fatalf("status = %d, want %d", result.Status(), cli.StatusSuccess)
+	}
+}
+
 func TestDriverReturnsOutputFailures(t *testing.T) {
 	command := cli.NewCommand("sample")
 	runtime := cli.NewContext(nil, failingWriter{}, io.Discard, nil, "/")

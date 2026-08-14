@@ -95,6 +95,8 @@ type DiagnosticTarget struct {
 	commandIDPath []string
 	valueID       string
 	sensitive     bool
+	origin        ValueOrigin
+	originSet     bool
 }
 
 // OptionTarget constructs an option target in the current Invocation scope
@@ -128,8 +130,19 @@ func (t DiagnosticTarget) ValueID() string { return t.valueID }
 // declaration
 func (t DiagnosticTarget) IsSensitive() bool { return t.sensitive }
 
+// ValueOrigin returns the origin when this Diagnostic concerns one raw value
+func (t DiagnosticTarget) ValueOrigin() (ValueOrigin, bool) {
+	return t.origin, t.originSet
+}
+
 func (t DiagnosticTarget) withSensitive(sensitive bool) DiagnosticTarget {
 	t.sensitive = sensitive
+	return t
+}
+
+func (t DiagnosticTarget) withValueOrigin(origin ValueOrigin) DiagnosticTarget {
+	t.origin = origin
+	t.originSet = true
 	return t
 }
 

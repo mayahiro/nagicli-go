@@ -521,6 +521,8 @@ func valueSourceName(source cli.ValueSource) string {
 		return "environment"
 	case cli.SourceDefault:
 		return "default"
+	case cli.SourceExternal:
+		return "external"
 	default:
 		panic(fmt.Sprintf("unknown ValueSource %d", source))
 	}

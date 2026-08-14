@@ -31,6 +31,8 @@ func runCommand(context *cli.Context, invocation *cli.Invocation) (cli.Outcome, 
 		source = "command line"
 	case cli.SourceEnvironment:
 		source = "environment"
+	case cli.SourceExternal:
+		source = "external"
 	}
 	if _, err := fmt.Fprintf(
 		context.Stdout(),

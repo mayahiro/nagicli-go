@@ -64,7 +64,7 @@ func (i *Invocation) CommandIDPath() []string {
 //
 // A deprecated root Command comes first. Subsequent targets follow their first
 // successful argv occurrence. Each stable target occurs at most once.
-// Environment and default value resolution do not produce notices
+// Environment, external, and default value resolution do not produce notices
 func (i *Invocation) DeprecationNotices() []DeprecationNotice {
 	notices := make([]DeprecationNotice, len(i.deprecationNotices))
 	for index, notice := range i.deprecationNotices {
@@ -409,6 +409,27 @@ func (c *Command) Parse(arguments []string) (ParseResult, error) {
 
 // ParseWithEnvironment parses argv and injected environment values
 func (c *Command) ParseWithEnvironment(arguments []string, environment map[string]string) (ParseResult, error) {
+	return c.parseWithOptionalValueResolver(arguments, environment, nil)
+}
+
+// ParseWithValueResolver parses argv, environment, and application-owned fallbacks
+//
+// The resolver is called only for selected Value Options that have no
+// command-line or environment value. A nil resolver behaves like
+// ParseWithEnvironment
+func (c *Command) ParseWithValueResolver(
+	arguments []string,
+	environment map[string]string,
+	resolver ValueResolver,
+) (ParseResult, error) {
+	return c.parseWithOptionalValueResolver(arguments, environment, resolver)
+}
+
+func (c *Command) parseWithOptionalValueResolver(
+	arguments []string,
+	environment map[string]string,
+	resolver ValueResolver,
+) (ParseResult, error) {
 	if err := c.Validate(); err != nil {
 		return ParseResult{}, err
 	}
@@ -420,6 +441,7 @@ func (c *Command) ParseWithEnvironment(arguments []string, environment map[strin
 		root:           c,
 		arguments:      append([]string(nil), arguments...),
 		environment:    copyEnvironment,
+		resolver:       resolver,
 		commands:       []*Command{c},
 		commandPath:    []string{c.name},
 		scopes:         []invocationScopeData{newInvocationScopeData(c)},
@@ -440,6 +462,7 @@ type argumentParser struct {
 	root               *Command
 	arguments          []string
 	environment        map[string]string
+	resolver           ValueResolver
 	index              int
 	commands           []*Command
 	commandPath        []string
@@ -479,7 +502,8 @@ func (p *argumentParser) parse() (ParseResult, error) {
 			p.index++
 		}
 	}
-	if err := p.resolveFallbacks(); err != nil {
+	selectedCommandIDPath := p.currentCommandIDPath()
+	if err := p.resolveFallbacks(selectedCommandIDPath); err != nil {
 		return ParseResult{}, err
 	}
 	if err := p.validateValues(); err != nil {
@@ -487,13 +511,10 @@ func (p *argumentParser) parse() (ParseResult, error) {
 	}
 	invocation := &Invocation{
 		commandPath:        append([]string(nil), p.commandPath...),
-		commandIDPath:      make([]string, len(p.commands)),
+		commandIDPath:      selectedCommandIDPath,
 		scopes:             p.scopes,
 		currentScope:       len(p.scopes) - 1,
 		deprecationNotices: p.deprecationNotices,
-	}
-	for index, command := range p.commands {
-		invocation.commandIDPath[index] = command.id
 	}
 	if err := p.runValidators(invocation); err != nil {
 		return ParseResult{}, err
@@ -750,7 +771,7 @@ func (p *argumentParser) applyOption(
 			option.id,
 			option.parser,
 			raw,
-			SourceCommandLine,
+			commandLineValueOrigin(),
 			option.sensitive,
 			target(),
 		)
@@ -870,7 +891,7 @@ func (p *argumentParser) parsePositional(raw string) error {
 		argument.id,
 		argument.parser,
 		raw,
-		SourceCommandLine,
+		commandLineValueOrigin(),
 		argument.sensitive,
 		ArgumentTarget(argument.id),
 	)
@@ -884,7 +905,7 @@ func (p *argumentParser) parsePositional(raw string) error {
 	return nil
 }
 
-func (p *argumentParser) resolveFallbacks() error {
+func (p *argumentParser) resolveFallbacks(selectedCommandIDPath []string) error {
 	for commandIndex, command := range p.commands {
 		values := p.scopes[commandIndex].values
 		for index := range command.options {
@@ -895,34 +916,154 @@ func (p *argumentParser) resolveFallbacks() error {
 			if _, present := values[option.id]; present {
 				continue
 			}
-			raw, source, present := "", SourceDefault, false
 			if option.environment != "" {
-				raw, present = p.environment[option.environment]
+				raw, present := p.environment[option.environment]
 				if present {
-					source = SourceEnvironment
+					origin := environmentValueOrigin(option.environment)
+					value, err := p.parseValue(
+						option.id,
+						option.parser,
+						raw,
+						origin,
+						option.sensitive,
+						OptionTarget(option.id).
+							WithCommandIDPath(p.commandIDPath(commandIndex)...).
+							withValueOrigin(origin),
+					)
+					if err != nil {
+						return err
+					}
+					p.pushValue(commandIndex, option.id, value, option.repeated)
+					continue
 				}
 			}
-			if !present && option.defaultSet {
-				raw, source, present = option.defaultVal, SourceDefault, true
+			if p.resolver != nil {
+				resolution, diagnostic := p.resolver(ValueResolutionRequest{
+					selectedCommandPath:   p.commandPath,
+					selectedCommandIDPath: selectedCommandIDPath,
+					commandPath:           p.commandPath[:commandIndex+1],
+					commandIDPath:         selectedCommandIDPath[:commandIndex+1],
+					valueID:               option.id,
+					repeated:              option.repeated,
+					sensitive:             option.sensitive,
+				})
+				if diagnostic != nil {
+					return p.resolverDiagnostic(diagnostic, commandIndex, option.id)
+				}
+				if resolution.resolved {
+					if err := p.applyExternalResolution(commandIndex, option, resolution); err != nil {
+						return err
+					}
+					continue
+				}
 			}
-			if !present {
-				continue
+			if option.defaultSet {
+				origin := defaultValueOrigin()
+				value, err := p.parseValue(
+					option.id,
+					option.parser,
+					option.defaultVal,
+					origin,
+					option.sensitive,
+					OptionTarget(option.id).
+						WithCommandIDPath(p.commandIDPath(commandIndex)...).
+						withValueOrigin(origin),
+				)
+				if err != nil {
+					return err
+				}
+				p.pushValue(commandIndex, option.id, value, option.repeated)
 			}
-			value, err := p.parseValue(
-				option.id,
-				option.parser,
-				raw,
-				source,
-				option.sensitive,
-				OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
-			)
-			if err != nil {
-				return err
-			}
-			p.pushValue(commandIndex, option.id, value, option.repeated)
 		}
 	}
 	return nil
+}
+
+func (p *argumentParser) applyExternalResolution(
+	commandIndex int,
+	option *OptionSpec,
+	resolution ValueResolution,
+) error {
+	if !validID(resolution.sourceIdentity) {
+		return p.diagTargets(
+			CodeInvalidSpecification,
+			fmt.Sprintf("Value Resolver returned an invalid source identity for %q", option.id),
+			OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+		)
+	}
+	if len(resolution.values) == 0 {
+		return p.diagTargets(
+			CodeInvalidSpecification,
+			fmt.Sprintf("Value Resolver returned an empty resolved result for %q", option.id),
+			OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+		)
+	}
+	if resolution.mode != ValueResolutionReplace && resolution.mode != ValueResolutionMerge {
+		return p.diagTargets(
+			CodeInvalidSpecification,
+			fmt.Sprintf("Value Resolver returned an invalid mode for %q", option.id),
+			OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+		)
+	}
+	if !option.repeated && (len(resolution.values) != 1 || resolution.mode != ValueResolutionReplace) {
+		return p.diagTargets(
+			CodeInvalidSpecification,
+			fmt.Sprintf("Value Resolver returned repeated or merged values for non-repeated %q", option.id),
+			OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+		)
+	}
+
+	for _, raw := range resolution.values {
+		origin := externalValueOrigin(resolution.sourceIdentity)
+		value, err := p.parseValue(
+			option.id,
+			option.parser,
+			raw,
+			origin,
+			option.sensitive,
+			OptionTarget(option.id).
+				WithCommandIDPath(p.commandIDPath(commandIndex)...).
+				withValueOrigin(origin),
+		)
+		if err != nil {
+			return err
+		}
+		p.pushValue(commandIndex, option.id, value, option.repeated)
+	}
+	if resolution.mode == ValueResolutionMerge && option.defaultSet {
+		origin := defaultValueOrigin()
+		value, err := p.parseValue(
+			option.id,
+			option.parser,
+			option.defaultVal,
+			origin,
+			option.sensitive,
+			OptionTarget(option.id).
+				WithCommandIDPath(p.commandIDPath(commandIndex)...).
+				withValueOrigin(origin),
+		)
+		if err != nil {
+			return err
+		}
+		p.pushValue(commandIndex, option.id, value, option.repeated)
+	}
+	return nil
+}
+
+func (p *argumentParser) resolverDiagnostic(
+	diagnostic *Diagnostic,
+	commandIndex int,
+	valueID string,
+) *Diagnostic {
+	if len(diagnostic.targets) == 0 {
+		diagnostic.WithTarget(
+			OptionTarget(valueID).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+		)
+	}
+	return diagnostic.
+		withDefaultTargetPath(p.commandIDPath(commandIndex)).
+		mapTargets(p.markSensitiveTarget).
+		withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
 }
 
 func (p *argumentParser) validateValues() error {
@@ -1047,10 +1188,11 @@ func (p *argumentParser) parseValue(
 	id string,
 	parser ValueParser,
 	raw string,
-	source ValueSource,
+	origin ValueOrigin,
 	sensitive bool,
 	target DiagnosticTarget,
 ) (ParsedValue, error) {
+	target = target.withValueOrigin(origin)
 	typed, err := parser.Parse(raw)
 	if err != nil {
 		message := fmt.Sprintf("invalid value %s for '%s': %s", quoteValue(raw), id, err)
@@ -1063,7 +1205,7 @@ func (p *argumentParser) parseValue(
 			target,
 		)
 	}
-	return ParsedValue{raw: raw, source: source, typed: typed, sensitive: sensitive}, nil
+	return ParsedValue{raw: raw, origin: origin, typed: typed, sensitive: sensitive}, nil
 }
 
 func (p *argumentParser) pushValue(scopeIndex int, id string, parsed ParsedValue, repeated bool) {

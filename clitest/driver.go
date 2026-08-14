@@ -17,6 +17,7 @@ type Driver struct {
 	currentDirectory string
 	cancelled        bool
 	policy           cli.RuntimePolicy
+	valueResolver    cli.ValueResolver
 }
 
 // New constructs a Driver with empty input and / as its current directory
@@ -44,6 +45,12 @@ func (d *Driver) Stdin(input []byte) *Driver {
 // Environment adds one environment value
 func (d *Driver) Environment(name, value string) *Driver {
 	d.environment[name] = value
+	return d
+}
+
+// ValueResolver sets an application-owned value fallback resolver
+func (d *Driver) ValueResolver(resolver cli.ValueResolver) *Driver {
+	d.valueResolver = resolver
 	return d
 }
 
@@ -85,6 +92,9 @@ func (d *Driver) Run() (Result, error) {
 		d.currentDirectory,
 		cancellation,
 	)
+	if d.valueResolver != nil {
+		runtime.WithValueResolver(d.valueResolver)
+	}
 	outcome, err := d.command.RunWithPolicy(runtime, d.arguments, d.policy)
 	if err != nil {
 		return Result{}, err

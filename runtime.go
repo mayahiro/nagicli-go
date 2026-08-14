@@ -17,6 +17,7 @@ type Context struct {
 	environment      map[string]string
 	currentDirectory string
 	cancellation     stdcontext.Context
+	valueResolver    ValueResolver
 }
 
 // NewContext constructs an injected Context without cancellation
@@ -93,6 +94,18 @@ func (c *Context) CurrentDirectory() string { return c.currentDirectory }
 // Cancellation returns the cooperative cancellation source
 func (c *Context) Cancellation() stdcontext.Context { return c.cancellation }
 
+// WithValueResolver configures an application-owned Value Resolver
+//
+// The resolver receives only selected Value Options that remain unresolved
+// after command-line and environment processing. A nil resolver clears it
+func (c *Context) WithValueResolver(resolver ValueResolver) *Context {
+	c.valueResolver = resolver
+	return c
+}
+
+// ValueResolver returns the configured application Value Resolver
+func (c *Context) ValueResolver() ValueResolver { return c.valueResolver }
+
 // Outcome is the result of one command handler
 type Outcome struct {
 	status ExitStatus
@@ -126,7 +139,17 @@ func (c *Command) RunWithPolicy(
 		return Outcome{}, errors.New("nagi cli: nil Context")
 	}
 	policy = policy.normalized()
-	result, err := c.ParseWithEnvironment(arguments, context.EnvironmentValues())
+	var result ParseResult
+	var err error
+	if context.valueResolver != nil {
+		result, err = c.ParseWithValueResolver(
+			arguments,
+			context.EnvironmentValues(),
+			context.valueResolver,
+		)
+	} else {
+		result, err = c.ParseWithEnvironment(arguments, context.EnvironmentValues())
+	}
 	if err != nil {
 		return renderError(context.stderr, err, policy)
 	}
@@ -271,8 +294,30 @@ func (c *Command) RunProcess() (ExitStatus, error) {
 	return c.RunProcessWithPolicy(DefaultRuntimePolicy())
 }
 
+// RunProcessWithValueResolver executes this command against the current
+// process with an application-owned Value Resolver
+func (c *Command) RunProcessWithValueResolver(resolver ValueResolver) (ExitStatus, error) {
+	return c.RunProcessWithPolicyAndValueResolver(DefaultRuntimePolicy(), resolver)
+}
+
 // RunProcessWithPolicy executes this command with an explicit Runtime Policy
 func (c *Command) RunProcessWithPolicy(policy RuntimePolicy) (ExitStatus, error) {
+	return c.runProcessWithPolicyAndValueResolver(policy, nil)
+}
+
+// RunProcessWithPolicyAndValueResolver executes this command against the
+// current process with an explicit Runtime Policy and Value Resolver
+func (c *Command) RunProcessWithPolicyAndValueResolver(
+	policy RuntimePolicy,
+	resolver ValueResolver,
+) (ExitStatus, error) {
+	return c.runProcessWithPolicyAndValueResolver(policy, resolver)
+}
+
+func (c *Command) runProcessWithPolicyAndValueResolver(
+	policy RuntimePolicy,
+	resolver ValueResolver,
+) (ExitStatus, error) {
 	cancellation, stop := signal.NotifyContext(stdcontext.Background(), os.Interrupt)
 	defer stop()
 	currentDirectory, err := os.Getwd()
@@ -287,6 +332,7 @@ func (c *Command) RunProcessWithPolicy(policy RuntimePolicy) (ExitStatus, error)
 		currentDirectory,
 		cancellation,
 	)
+	context.WithValueResolver(resolver)
 	outcome, err := c.RunWithPolicy(context, os.Args[1:], policy)
 	if err != nil {
 		return StatusFailure, err

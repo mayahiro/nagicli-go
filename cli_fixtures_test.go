@@ -732,6 +732,8 @@ func source(value cli.ValueSource) string {
 		return "env"
 	case cli.SourceDefault:
 		return "default"
+	case cli.SourceExternal:
+		return "external"
 	default:
 		panic("unknown value source")
 	}

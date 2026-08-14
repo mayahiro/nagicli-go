@@ -22,7 +22,7 @@ const (
 type PresenceBasis uint8
 
 const (
-	// PresenceResolved counts values from command line, environment, or default
+	// PresenceResolved counts command-line, environment, external, or default values
 	PresenceResolved PresenceBasis = iota
 	// PresenceCommandLine counts only values supplied in argv
 	PresenceCommandLine

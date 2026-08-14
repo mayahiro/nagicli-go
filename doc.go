@@ -20,6 +20,11 @@
 // redact or suppress those values while explicit Invocation access preserves
 // the original raw and typed data.
 //
+// ValueResolver adapts already loaded application configuration into selected
+// Value Option fallbacks without giving Nagi ownership of its schema or I/O.
+// Fixed precedence remains command line, environment, external resolver, then
+// command-definition default.
+//
 // CompletionEngine snapshots the validated graph without handlers and resolves
 // static candidates plus only the active Option or Argument provider. Package
 // completion owns shell-specific generation and its reserved protocol.
