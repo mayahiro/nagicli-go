@@ -35,6 +35,7 @@ go run ./examples/basic Nagi
 - Structured noticeを持つ汎用HiddenとDeprecatedのCommandとOption lifecycle metadata
 - Help、Diagnostic、formatting、completionをredactする汎用Sensitive Value metadata
 - Command line、environment、external、defaultの固定優先順位を持つApplication所有Value Source adapter
+- 注入可能なfile readと任意のstandard inputを持つopt-inで上限付きのResponse File展開
 - Structured deterministic Help、制御可能なsubcommand Usage Variant、custom section、全graph traversal、任意のMarkdownとman renderer、`help [COMMAND...]`
 - 安定Diagnostic code、category、value target、hint、plainまたはstable JSON rendering、設定可能なexit-code mapping
 - 注入可能なstdin、stdout、stderr、environment、current directory、`context.Context` cancellation
@@ -46,7 +47,7 @@ go run ./examples/basic Nagi
 
 共有[CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.md)が観測可能な契約とRust parityを定義します
 
-[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)では継承Option、command-local scope、Value Source adapter、completion、Help presentation、lifecycleとSensitive Value metadata、structured validator、段階導入を説明します
+[Public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API_ja.md)では継承Option、command-local scope、Value Source adapter、Response File、completion、Help presentation、lifecycleとSensitive Value metadata、structured validator、段階導入を説明します
 
 ## Application test
 
@@ -67,6 +68,7 @@ go test ./examples/basic
 | [Command lifecycle](examples/lifecycle/README.md) | `go run ./examples/lifecycle --legacy old` |
 | [Sensitive Value](examples/sensitive-values/README.md) | `go run ./examples/sensitive-values --token demo-token` |
 | [Value Source Adapter](examples/value-sources/README.md) | `go run ./examples/value-sources` |
+| [Response File](examples/response-files/README.md) | `go run ./examples/response-files @examples/response-files/arguments.txt` |
 | [Help派生document](examples/documentation/README.md) | `go run ./examples/documentation markdown` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [軽量prompt](examples/prompt/README.md) | `go run ./examples/prompt` |
@@ -83,6 +85,10 @@ Completion installation、dynamic candidate I/O、credential管理、approval po
 Sensitive Value metadataはframework projectionをredactしますが、memoryをzeroizeせず、OSのprocess argumentまたはshell historyから値を隠しません
 
 既読設定はValue Resolverで対応付けられますが、設定file読み込みとCLIからTUIへの統合は提供しません
+
+Response Fileは明示的に有効化するまで無効で、shellではなくNagiの上限付きtokenizerを使います
+
+Variable、glob、tilde、environment valueは展開しません
 
 長時間実行するHandlerとcompletion providerは注入されたcancellation contextを協調的に確認する必要があります
 

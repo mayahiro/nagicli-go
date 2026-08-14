@@ -38,6 +38,7 @@ go run ./examples/basic Nagi
 - Generic Hidden and Deprecated command and option lifecycle metadata with structured notices
 - Generic Sensitive Value metadata with Help, Diagnostic, formatting, and completion redaction
 - Application-owned Value Source adapters with fixed command-line, environment, external, and default precedence
+- Opt-in bounded Response File expansion with injected file reads and optional standard input
 - Structured deterministic Help, controllable subcommand Usage Variants, custom sections, whole-graph traversal, optional Markdown and man renderers, and `help [COMMAND...]`
 - Stable Diagnostic codes, categories, value targets, and hints with plain or stable JSON rendering and configurable exit-code mapping
 - Injected stdin, stdout, stderr, environment, current directory, and `context.Context` cancellation
@@ -51,6 +52,7 @@ The shared [CLI semantics](https://github.com/mayahiro/nagi/blob/main/spec/cli.m
 define the observable contract and Rust parity. The
 [public CLI API guide](https://github.com/mayahiro/nagi/blob/main/docs/CLI_API.md)
 explains inherited options, command-local scopes, Value Source adapters,
+Response Files,
 completion, Help presentation, lifecycle and Sensitive Value metadata,
 structured validators, and staged adoption
 
@@ -75,6 +77,7 @@ go test ./examples/basic
 | [Command lifecycle](examples/lifecycle/README.md) | `go run ./examples/lifecycle --legacy old` |
 | [Sensitive Value](examples/sensitive-values/README.md) | `go run ./examples/sensitive-values --token demo-token` |
 | [Value Source Adapter](examples/value-sources/README.md) | `go run ./examples/value-sources` |
+| [Response File](examples/response-files/README.md) | `go run ./examples/response-files @examples/response-files/arguments.txt` |
 | [Derived Help documents](examples/documentation/README.md) | `go run ./examples/documentation markdown` |
 | [Shell completion](examples/completion/README.md) | `go run ./examples/completion generate bash` |
 | [Lightweight prompts](examples/prompt/README.md) | `go run ./examples/prompt` |
@@ -91,7 +94,9 @@ progress meaning. Sensitive Value metadata redacts framework projections but
 does not zeroize memory or hide process arguments from the operating system or
 shell history. Already loaded configuration can be mapped through a Value
 Resolver, but configuration-file loading and CLI-to-TUI integration are not
-provided. Long-running handlers and completion
+provided. Response Files are disabled unless explicitly enabled and use
+Nagi's bounded tokenizer rather than a shell; they do not expand variables,
+globs, tildes, or environment values. Long-running handlers and completion
 providers must poll the injected cancellation context cooperatively. The
 portable graph does not model arbitrary invocation grammars. Help-only Usage
 Variants can document validator-backed forms without changing parser semantics

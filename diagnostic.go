@@ -47,6 +47,18 @@ const (
 	CodeCancelled DiagnosticCode = "cancelled"
 	// CodeIOError reports an injected I/O failure
 	CodeIOError DiagnosticCode = "io-error"
+	// CodeResponseFileIO reports a Response File read failure
+	CodeResponseFileIO DiagnosticCode = "response-file-io"
+	// CodeResponseFileEncoding reports a non-UTF-8 Response File
+	CodeResponseFileEncoding DiagnosticCode = "response-file-encoding"
+	// CodeResponseFileSyntax reports invalid Response File tokenization
+	CodeResponseFileSyntax DiagnosticCode = "response-file-syntax"
+	// CodeResponseFileCycle reports a lexical include cycle
+	CodeResponseFileCycle DiagnosticCode = "response-file-cycle"
+	// CodeResponseFileLimit reports a Response File resource limit
+	CodeResponseFileLimit DiagnosticCode = "response-file-limit"
+	// CodeResponseFileStdin reports disabled or repeated standard-input expansion
+	CodeResponseFileStdin DiagnosticCode = "response-file-stdin"
 )
 
 // ExitStatus is a portable process status from 0 through 255
@@ -79,7 +91,7 @@ const (
 	CategoryIO DiagnosticCategory = "io"
 )
 
-// DiagnosticTargetKind identifies an option or positional argument
+// DiagnosticTargetKind identifies an option, argument, or Response File
 type DiagnosticTargetKind string
 
 const (
@@ -87,9 +99,11 @@ const (
 	TargetOption DiagnosticTargetKind = "option"
 	// TargetArgument identifies a positional argument
 	TargetArgument DiagnosticTargetKind = "argument"
+	// TargetResponseFile identifies a Response File include reference
+	TargetResponseFile DiagnosticTargetKind = "response-file"
 )
 
-// DiagnosticTarget identifies one command-local option or argument
+// DiagnosticTarget identifies one option, argument, or Response File
 type DiagnosticTarget struct {
 	kind          DiagnosticTargetKind
 	commandIDPath []string
@@ -109,13 +123,21 @@ func ArgumentTarget(valueID string) DiagnosticTarget {
 	return DiagnosticTarget{kind: TargetArgument, valueID: valueID}
 }
 
+// ResponseFileTarget constructs a target for an include reference without its
+// leading at sign
+func ResponseFileTarget(reference string) DiagnosticTarget {
+	return DiagnosticTarget{kind: TargetResponseFile, valueID: reference}
+}
+
 // WithCommandIDPath returns a copy with an explicit stable command-ID path
 func (t DiagnosticTarget) WithCommandIDPath(path ...string) DiagnosticTarget {
-	t.commandIDPath = append([]string(nil), path...)
+	if t.kind != TargetResponseFile {
+		t.commandIDPath = append([]string(nil), path...)
+	}
 	return t
 }
 
-// Kind returns whether this target identifies an option or argument
+// Kind returns the entity kind identified by this target
 func (t DiagnosticTarget) Kind() DiagnosticTargetKind { return t.kind }
 
 // CommandIDPath returns a copy of the stable command-ID path
@@ -123,7 +145,7 @@ func (t DiagnosticTarget) CommandIDPath() []string {
 	return append([]string(nil), t.commandIDPath...)
 }
 
-// ValueID returns the command-local value ID
+// ValueID returns the command-local value ID or Response File reference
 func (t DiagnosticTarget) ValueID() string { return t.valueID }
 
 // IsSensitive reports whether this target identifies a Sensitive Value
@@ -250,7 +272,7 @@ func (d *Diagnostic) withCommand(path []string, usage string) *Diagnostic {
 
 func (d *Diagnostic) withDefaultTargetPath(path []string) *Diagnostic {
 	for index := range d.targets {
-		if len(d.targets[index].commandIDPath) == 0 {
+		if d.targets[index].kind != TargetResponseFile && len(d.targets[index].commandIDPath) == 0 {
 			d.targets[index].commandIDPath = append([]string(nil), path...)
 		}
 	}
@@ -296,11 +318,13 @@ func categoryForCode(code DiagnosticCode) DiagnosticCategory {
 	case CodeUnknownOption, CodeUnexpectedOptionValue, CodeMissingOptionValue,
 		CodeDuplicateOption, CodeUnknownCommand, CodeMissingSubcommand,
 		CodeUnexpectedArgument, CodeMissingRequired, CodeInvalidValue,
-		CodeRequires, CodeConflicts, CodeOptionGroup, CodeValidation:
+		CodeRequires, CodeConflicts, CodeOptionGroup, CodeValidation,
+		CodeResponseFileEncoding, CodeResponseFileSyntax, CodeResponseFileCycle,
+		CodeResponseFileLimit, CodeResponseFileStdin:
 		return CategoryUsage
 	case CodeCancelled:
 		return CategoryCancellation
-	case CodeIOError:
+	case CodeIOError, CodeResponseFileIO:
 		return CategoryIO
 	default:
 		return CategoryExecution

@@ -25,6 +25,12 @@
 // Fixed precedence remains command line, environment, external resolver, then
 // command-definition default.
 //
+// ExpandResponseFiles provides an opt-in, resource-bounded lexical layer for
+// @file arguments without shell, variable, glob, tilde, or environment
+// expansion. Ordinary parser and runtime entry points preserve leading @
+// literally unless Response Files are enabled through Context or
+// ProcessOptions.
+//
 // CompletionEngine snapshots the validated graph without handlers and resolves
 // static candidates plus only the active Option or Argument provider. Package
 // completion owns shell-specific generation and its reserved protocol.

@@ -18,6 +18,9 @@ type Driver struct {
 	cancelled        bool
 	policy           cli.RuntimePolicy
 	valueResolver    cli.ValueResolver
+	responseFiles    bool
+	responseOptions  cli.ResponseFileOptions
+	responseReader   cli.ResponseFileReader
 }
 
 // New constructs a Driver with empty input and / as its current directory
@@ -51,6 +54,17 @@ func (d *Driver) Environment(name, value string) *Driver {
 // ValueResolver sets an application-owned value fallback resolver
 func (d *Driver) ValueResolver(resolver cli.ValueResolver) *Driver {
 	d.valueResolver = resolver
+	return d
+}
+
+// ResponseFiles enables expansion with an injected file reader
+func (d *Driver) ResponseFiles(
+	options cli.ResponseFileOptions,
+	reader cli.ResponseFileReader,
+) *Driver {
+	d.responseFiles = true
+	d.responseOptions = options
+	d.responseReader = reader
 	return d
 }
 
@@ -94,6 +108,9 @@ func (d *Driver) Run() (Result, error) {
 	)
 	if d.valueResolver != nil {
 		runtime.WithValueResolver(d.valueResolver)
+	}
+	if d.responseFiles {
+		runtime.WithResponseFiles(d.responseOptions, d.responseReader)
 	}
 	outcome, err := d.command.RunWithPolicy(runtime, d.arguments, d.policy)
 	if err != nil {

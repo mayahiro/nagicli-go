@@ -18,6 +18,9 @@ type Context struct {
 	currentDirectory string
 	cancellation     stdcontext.Context
 	valueResolver    ValueResolver
+	responseFiles    bool
+	responseOptions  ResponseFileOptions
+	responseReader   ResponseFileReader
 }
 
 // NewContext constructs an injected Context without cancellation
@@ -106,6 +109,93 @@ func (c *Context) WithValueResolver(resolver ValueResolver) *Context {
 // ValueResolver returns the configured application Value Resolver
 func (c *Context) ValueResolver() ValueResolver { return c.valueResolver }
 
+// WithResponseFiles configures opt-in Response File expansion
+//
+// Exact @- expansion, when enabled in options, consumes this Context's standard
+// input. A nil reader supports standard-input-only expansion; a file include
+// then returns an invalid-specification Diagnostic
+func (c *Context) WithResponseFiles(
+	options ResponseFileOptions,
+	reader ResponseFileReader,
+) *Context {
+	c.responseFiles = true
+	c.responseOptions = options
+	c.responseReader = reader
+	return c
+}
+
+// WithoutResponseFiles disables Response File expansion
+func (c *Context) WithoutResponseFiles() *Context {
+	c.responseFiles = false
+	c.responseOptions = ResponseFileOptions{}
+	c.responseReader = nil
+	return c
+}
+
+// ResponseFileOptions returns configured options and whether expansion is enabled
+func (c *Context) ResponseFileOptions() (ResponseFileOptions, bool) {
+	return c.responseOptions, c.responseFiles
+}
+
+// ProcessOptions composes complete process Runtime services
+//
+// Its zero value uses the default Runtime Policy without a Value Resolver or
+// Response File expansion
+type ProcessOptions struct {
+	policy          RuntimePolicy
+	valueResolver   ValueResolver
+	responseFiles   bool
+	responseOptions ResponseFileOptions
+}
+
+// DefaultProcessOptions returns process integration without optional services
+func DefaultProcessOptions() ProcessOptions {
+	return ProcessOptions{policy: DefaultRuntimePolicy()}
+}
+
+// WithPolicy returns a copy using an explicit Runtime Policy
+func (o ProcessOptions) WithPolicy(policy RuntimePolicy) ProcessOptions {
+	o.policy = policy
+	return o
+}
+
+// WithValueResolver returns a copy using an application-owned Value Resolver
+func (o ProcessOptions) WithValueResolver(resolver ValueResolver) ProcessOptions {
+	o.valueResolver = resolver
+	return o
+}
+
+// WithoutValueResolver returns a copy without a Value Resolver
+func (o ProcessOptions) WithoutValueResolver() ProcessOptions {
+	o.valueResolver = nil
+	return o
+}
+
+// WithResponseFiles returns a copy enabling filesystem-backed Response Files
+func (o ProcessOptions) WithResponseFiles(options ResponseFileOptions) ProcessOptions {
+	o.responseFiles = true
+	o.responseOptions = options
+	return o
+}
+
+// WithoutResponseFiles returns a copy without Response File expansion
+func (o ProcessOptions) WithoutResponseFiles() ProcessOptions {
+	o.responseFiles = false
+	o.responseOptions = ResponseFileOptions{}
+	return o
+}
+
+// Policy returns the configured normalized Runtime Policy
+func (o ProcessOptions) Policy() RuntimePolicy { return o.policy.normalized() }
+
+// ValueResolver returns the configured application Value Resolver
+func (o ProcessOptions) ValueResolver() ValueResolver { return o.valueResolver }
+
+// ResponseFileOptions returns configured options and whether expansion is enabled
+func (o ProcessOptions) ResponseFileOptions() (ResponseFileOptions, bool) {
+	return o.responseOptions, o.responseFiles
+}
+
 // Outcome is the result of one command handler
 type Outcome struct {
 	status ExitStatus
@@ -139,17 +229,28 @@ func (c *Command) RunWithPolicy(
 		return Outcome{}, errors.New("nagi cli: nil Context")
 	}
 	policy = policy.normalized()
-	var result ParseResult
-	var err error
-	if context.valueResolver != nil {
-		result, err = c.ParseWithValueResolver(
-			arguments,
-			context.EnvironmentValues(),
-			context.valueResolver,
-		)
-	} else {
-		result, err = c.ParseWithEnvironment(arguments, context.EnvironmentValues())
+	if err := c.Validate(); err != nil {
+		return renderError(context.stderr, err, policy)
 	}
+	expanded := append([]string(nil), arguments...)
+	if context.responseFiles {
+		var err error
+		expanded, err = ExpandResponseFiles(
+			expanded,
+			context.currentDirectory,
+			context.responseOptions,
+			context.responseReader,
+			context.stdin,
+		)
+		if err != nil {
+			return renderError(context.stderr, err, policy)
+		}
+	}
+	result, err := c.parseValidatedWithOptionalValueResolver(
+		expanded,
+		context.EnvironmentValues(),
+		context.valueResolver,
+	)
 	if err != nil {
 		return renderError(context.stderr, err, policy)
 	}
@@ -291,18 +392,18 @@ func (c *Command) RunInvocationWithPolicy(
 
 // RunProcess executes this command against the current process and returns its status
 func (c *Command) RunProcess() (ExitStatus, error) {
-	return c.RunProcessWithPolicy(DefaultRuntimePolicy())
+	return c.RunProcessWithOptions(DefaultProcessOptions())
 }
 
 // RunProcessWithValueResolver executes this command against the current
 // process with an application-owned Value Resolver
 func (c *Command) RunProcessWithValueResolver(resolver ValueResolver) (ExitStatus, error) {
-	return c.RunProcessWithPolicyAndValueResolver(DefaultRuntimePolicy(), resolver)
+	return c.RunProcessWithOptions(DefaultProcessOptions().WithValueResolver(resolver))
 }
 
 // RunProcessWithPolicy executes this command with an explicit Runtime Policy
 func (c *Command) RunProcessWithPolicy(policy RuntimePolicy) (ExitStatus, error) {
-	return c.runProcessWithPolicyAndValueResolver(policy, nil)
+	return c.RunProcessWithOptions(DefaultProcessOptions().WithPolicy(policy))
 }
 
 // RunProcessWithPolicyAndValueResolver executes this command against the
@@ -311,13 +412,14 @@ func (c *Command) RunProcessWithPolicyAndValueResolver(
 	policy RuntimePolicy,
 	resolver ValueResolver,
 ) (ExitStatus, error) {
-	return c.runProcessWithPolicyAndValueResolver(policy, resolver)
+	return c.RunProcessWithOptions(
+		DefaultProcessOptions().WithPolicy(policy).WithValueResolver(resolver),
+	)
 }
 
-func (c *Command) runProcessWithPolicyAndValueResolver(
-	policy RuntimePolicy,
-	resolver ValueResolver,
-) (ExitStatus, error) {
+// RunProcessWithOptions executes this command against the current process with
+// composable Runtime, Value Resolver, and Response File options
+func (c *Command) RunProcessWithOptions(options ProcessOptions) (ExitStatus, error) {
 	cancellation, stop := signal.NotifyContext(stdcontext.Background(), os.Interrupt)
 	defer stop()
 	currentDirectory, err := os.Getwd()
@@ -332,8 +434,11 @@ func (c *Command) runProcessWithPolicyAndValueResolver(
 		currentDirectory,
 		cancellation,
 	)
-	context.WithValueResolver(resolver)
-	outcome, err := c.RunWithPolicy(context, os.Args[1:], policy)
+	context.WithValueResolver(options.valueResolver)
+	if options.responseFiles {
+		context.WithResponseFiles(options.responseOptions, FilesystemResponseFileReader{})
+	}
+	outcome, err := c.RunWithPolicy(context, os.Args[1:], options.policy)
 	if err != nil {
 		return StatusFailure, err
 	}

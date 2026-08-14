@@ -202,6 +202,9 @@ func (i *Invocation) lookup(id string) (invocationDefinition, invocationValue, b
 }
 
 func (i *Invocation) markSensitiveTarget(target DiagnosticTarget) DiagnosticTarget {
+	if target.kind == TargetResponseFile {
+		return target
+	}
 	scopeIndex := -1
 	if len(target.commandIDPath) == 0 {
 		scopeIndex = i.currentScope
@@ -433,6 +436,14 @@ func (c *Command) parseWithOptionalValueResolver(
 	if err := c.Validate(); err != nil {
 		return ParseResult{}, err
 	}
+	return c.parseValidatedWithOptionalValueResolver(arguments, environment, resolver)
+}
+
+func (c *Command) parseValidatedWithOptionalValueResolver(
+	arguments []string,
+	environment map[string]string,
+	resolver ValueResolver,
+) (ParseResult, error) {
 	copyEnvironment := make(map[string]string, len(environment))
 	for key, value := range environment {
 		copyEnvironment[key] = value
@@ -1279,6 +1290,8 @@ func (p *argumentParser) markSensitiveTarget(target DiagnosticTarget) Diagnostic
 				break
 			}
 		}
+	case TargetResponseFile:
+		return target
 	}
 	return target.withSensitive(sensitive)
 }

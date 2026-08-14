@@ -5,6 +5,7 @@ bench:
 	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkCompletion(SelectedPath|100UnrelatedBranches|NoVisibleDeclarations|1000HiddenPairs)$$' -benchmem -benchtime=10000x -count=3 .
 	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkJSONDiagnosticRenderer$$' -benchmem -benchtime=100x -count=3 .
 	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkValueResolver(Single|1000Selected|1000UnselectedBranches)$$' -benchmem -benchtime=100x -count=3 .
+	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkResponseFile(Single|1000Tokens|1000LiteralArguments)$$' -benchmem -benchtime=100x -count=3 .
 	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkDerivedHelpDocuments$$' -benchmem -benchtime=20x -count=3 ./document
 	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkPrompt(Confirm|Input64KiB)$$' -benchmem -benchtime=100x -count=3 ./prompt
 	GOTOOLCHAIN=local go test -run '^$$' -bench '^BenchmarkStatus(TerminalUpdate|LogCoalesced)$$' -benchmem -benchtime=10000x -count=3 ./status
