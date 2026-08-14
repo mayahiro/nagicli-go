@@ -12,7 +12,7 @@ func application() *cli.Command {
 	return cli.NewCommand("service").
 		ID("service-root").
 		About("Manage a service").
-		Version("0.3.2").
+		Version("0.4.0").
 		Option(
 			cli.ValueOption("profile").
 				Long("profile").

@@ -14,7 +14,7 @@ Helpのterminal Cell幅計算にNagi Textを使用し、Nagi SurfaceとNagi TUI�
 ## 導入
 
 ```sh
-go get github.com/mayahiro/nagicli-go@v0.3.2
+go get github.com/mayahiro/nagicli-go@latest
 ```
 
 ## Quick start

@@ -14,7 +14,7 @@ func application() *cli.Command {
 	return cli.NewCommand("tool").
 		ID("tool-root").
 		About("Inspect one target").
-		Version("0.3.2").
+		Version("0.4.0").
 		RequireSubcommand().
 		Subcommand(
 			cli.NewCommand("inspect").

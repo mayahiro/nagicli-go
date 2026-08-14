@@ -17,7 +17,7 @@ Nagi Surface or Nagi TUI
 ## Installation
 
 ```sh
-go get github.com/mayahiro/nagicli-go@v0.3.2
+go get github.com/mayahiro/nagicli-go@latest
 ```
 
 ## Quick start
