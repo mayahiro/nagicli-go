@@ -31,6 +31,43 @@ type HelpEntry struct {
 	Label string
 	// Description explains the labeled item
 	Description string
+	sensitive   bool
+	deprecation Deprecation
+}
+
+// IsSensitive reports whether this entry describes a Sensitive Value
+// declaration
+func (e HelpEntry) IsSensitive() bool { return e.sensitive }
+
+// Deprecation returns replacement metadata when this entry is deprecated
+func (e HelpEntry) Deprecation() (Deprecation, bool) {
+	return e.deprecation, e.deprecation.configured
+}
+
+// HelpInheritedOption is one option inherited from an ancestor in a Help
+// Document.
+type HelpInheritedOption struct {
+	// CommandPath is the source canonical command path.
+	CommandPath []string
+	// CommandIDPath is the source stable command-ID path.
+	CommandIDPath []string
+	// ID is the source-local stable option ID.
+	ID string
+	// Label is the option display label.
+	Label string
+	// Description excludes the rendered origin note.
+	Description string
+	sensitive   bool
+	deprecation Deprecation
+}
+
+// IsSensitive reports whether this inherited option is Sensitive
+func (o HelpInheritedOption) IsSensitive() bool { return o.sensitive }
+
+// Deprecation returns replacement metadata when this inherited option is
+// deprecated
+func (o HelpInheritedOption) Deprecation() (Deprecation, bool) {
+	return o.deprecation, o.deprecation.configured
 }
 
 // HelpExample is one named command invocation
@@ -150,19 +187,21 @@ type HelpOptionRelation struct {
 
 // HelpDocument is the structured, renderer-independent Help representation
 type HelpDocument struct {
-	commandPath     []string
-	description     string
-	usage           []string
-	usageVariants   []HelpUsageVariant
-	commands        []HelpEntry
-	arguments       []HelpEntry
-	options         []HelpEntry
-	optionRelations []HelpOptionRelation
-	optionGroups    []HelpOptionGroup
-	examples        []HelpExample
-	notes           []string
-	links           []HelpLink
-	sections        []HelpSection
+	commandPath      []string
+	description      string
+	deprecation      Deprecation
+	usage            []string
+	usageVariants    []HelpUsageVariant
+	commands         []HelpEntry
+	arguments        []HelpEntry
+	options          []HelpEntry
+	inheritedOptions []HelpInheritedOption
+	optionRelations  []HelpOptionRelation
+	optionGroups     []HelpOptionGroup
+	examples         []HelpExample
+	notes            []string
+	links            []HelpLink
+	sections         []HelpSection
 }
 
 // CommandPath returns the canonical root-to-target path
@@ -172,6 +211,12 @@ func (d HelpDocument) CommandPath() []string {
 
 // Description returns the command description
 func (d HelpDocument) Description() string { return d.description }
+
+// Deprecation returns replacement metadata when the selected command is
+// deprecated
+func (d HelpDocument) Deprecation() (Deprecation, bool) {
+	return d.deprecation, d.deprecation.configured
+}
 
 // Usage returns a copy of rendered usage lines
 func (d HelpDocument) Usage() []string { return append([]string(nil), d.usage...) }
@@ -199,6 +244,18 @@ func (d HelpDocument) Arguments() []HelpEntry {
 // Options returns a copy of option entries
 func (d HelpDocument) Options() []HelpEntry {
 	return append([]HelpEntry(nil), d.options...)
+}
+
+// InheritedOptions returns a deep copy in outermost-to-nearest ancestor and
+// definition order.
+func (d HelpDocument) InheritedOptions() []HelpInheritedOption {
+	options := make([]HelpInheritedOption, len(d.inheritedOptions))
+	for index, option := range d.inheritedOptions {
+		options[index] = option
+		options[index].CommandPath = append([]string(nil), option.CommandPath...)
+		options[index].CommandIDPath = append([]string(nil), option.CommandIDPath...)
+	}
+	return options
 }
 
 // OptionRelations returns a copy of pairwise option constraints
@@ -253,6 +310,11 @@ func (PlainHelpRenderer) RenderHelp(document HelpDocument) string {
 		output.WriteString(document.description)
 		output.WriteString("\n\n")
 	}
+	if document.deprecation.configured {
+		output.WriteString("Deprecated: use ")
+		output.WriteString(document.deprecation.replacement)
+		output.WriteString("\n\n")
+	}
 
 	output.WriteString("Usage:\n")
 	for _, usage := range document.usage {
@@ -263,6 +325,22 @@ func (PlainHelpRenderer) RenderHelp(document HelpDocument) string {
 	renderHelpEntrySection(&output, "Commands", document.commands)
 	renderHelpEntrySection(&output, "Arguments", document.arguments)
 	renderHelpEntrySection(&output, "Options", document.options)
+	inheritedOptions := make([]HelpEntry, 0, len(document.inheritedOptions))
+	for _, option := range document.inheritedOptions {
+		description := option.Description
+		if description != "" {
+			description += " "
+		}
+		description += "[from " + strings.Join(option.CommandPath, " ") + "]"
+		inheritedOptions = append(inheritedOptions, HelpEntry{
+			ID:          option.ID,
+			Label:       option.Label,
+			Description: description,
+			sensitive:   option.sensitive,
+			deprecation: option.deprecation,
+		})
+	}
+	renderHelpEntrySection(&output, "Inherited Options", inheritedOptions)
 
 	if len(document.optionRelations) > 0 || len(document.optionGroups) > 0 {
 		entries := make(
@@ -340,6 +418,83 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 		)
 	}
 	commandIDPath := c.commandIDPathAtPath(path)
+	commandLineage := c.commandsAtPath(path)
+	return buildHelpDocument(c, command, path, commandIDPath, commandLineage), nil
+}
+
+// VisitHelpDocuments visits visible commands in definition-order preorder
+//
+// The graph is validated once before the first callback. The root is visited
+// first, hidden command subtrees are omitted, and returning false stops
+// traversal successfully. The Command Graph must not be mutated while this
+// synchronous traversal is active. A nil visitor returns an Invalid
+// Specification Diagnostic.
+func (c *Command) VisitHelpDocuments(visitor func(HelpDocument) bool) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if visitor == nil {
+		return NewDiagnostic(
+			CodeInvalidSpecification,
+			"help document visitor must not be nil",
+		)
+	}
+
+	path := []string{c.name}
+	commandIDPath := []string{c.id}
+	commandLineage := []*Command{c}
+	if !visitor(buildHelpDocument(c, c, path, commandIDPath, commandLineage)) {
+		return nil
+	}
+
+	type visitFrame struct {
+		command   *Command
+		nextChild int
+	}
+	stack := []visitFrame{{command: c}}
+	for len(stack) > 0 {
+		frame := &stack[len(stack)-1]
+		var child *Command
+		for frame.nextChild < len(frame.command.subcommands) {
+			candidate := frame.command.subcommands[frame.nextChild]
+			frame.nextChild++
+			if !candidate.hidden {
+				child = candidate
+				break
+			}
+		}
+		if child != nil {
+			path = append(path, child.name)
+			commandIDPath = append(commandIDPath, child.id)
+			commandLineage = append(commandLineage, child)
+			if !visitor(buildHelpDocument(
+				c,
+				child,
+				path,
+				commandIDPath,
+				commandLineage,
+			)) {
+				return nil
+			}
+			stack = append(stack, visitFrame{command: child})
+			continue
+		}
+
+		stack = stack[:len(stack)-1]
+		if len(stack) > 0 {
+			path = path[:len(path)-1]
+			commandIDPath = commandIDPath[:len(commandIDPath)-1]
+			commandLineage = commandLineage[:len(commandLineage)-1]
+		}
+	}
+	return nil
+}
+
+func buildHelpDocument(
+	root, command *Command,
+	path, commandIDPath []string,
+	commandLineage []*Command,
+) HelpDocument {
 
 	usageVariants := helpUsageVariants(command, path, commandIDPath)
 	usage := make([]string, 0, len(usageVariants))
@@ -349,6 +504,7 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 	document := HelpDocument{
 		commandPath: append([]string(nil), path...),
 		description: command.about,
+		deprecation: command.deprecation,
 		usage:       usage,
 		usageVariants: append(
 			[]HelpUsageVariant(nil),
@@ -359,13 +515,17 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 		links:    append([]HelpLink(nil), command.links...),
 	}
 	for _, child := range command.subcommands {
+		if child.hidden {
+			continue
+		}
 		document.commands = append(document.commands, HelpEntry{
 			ID:          child.id,
 			Label:       child.name,
 			Description: child.about,
+			deprecation: child.deprecation,
 		})
 	}
-	if command == c && len(command.subcommands) > 0 {
+	if command == root && hasVisibleSubcommand(command) {
 		document.commands = append(document.commands, HelpEntry{
 			ID:          "help",
 			Label:       "help",
@@ -378,22 +538,34 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 			ID:          argument.id,
 			Label:       argumentLabel(argument),
 			Description: argument.help,
+			sensitive:   argument.sensitive,
 		})
 	}
 	for index := range command.options {
 		option := &command.options[index]
+		if option.hidden {
+			continue
+		}
 		document.options = append(document.options, HelpEntry{
 			ID:          option.id,
 			Label:       optionLabel(option),
 			Description: optionDescription(option),
+			sensitive:   option.sensitive,
+			deprecation: option.deprecation,
 		})
 		for _, relation := range option.requires {
+			if target := command.optionByID(relation.id); target == nil || target.hidden {
+				continue
+			}
 			document.optionRelations = append(
 				document.optionRelations,
 				helpOptionRelation(command, option, relation, HelpRelationRequires),
 			)
 		}
 		for _, relation := range option.conflicts {
+			if target := command.optionByID(relation.id); target == nil || target.hidden {
+				continue
+			}
 			document.optionRelations = append(
 				document.optionRelations,
 				helpOptionRelation(command, option, relation, HelpRelationConflicts),
@@ -405,14 +577,41 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 		Label:       "-h, --help",
 		Description: "Print help",
 	})
-	if c.version != "" {
+	if root.version != "" {
 		document.options = append(document.options, HelpEntry{
 			ID:          "version",
 			Label:       "-V, --version",
 			Description: "Print version",
 		})
 	}
+	for scopeIndex, ancestor := range commandLineage[:len(commandLineage)-1] {
+		for optionIndex := range ancestor.options {
+			option := &ancestor.options[optionIndex]
+			if !option.inherited || option.hidden {
+				continue
+			}
+			document.inheritedOptions = append(document.inheritedOptions, HelpInheritedOption{
+				CommandPath:   append([]string(nil), path[:scopeIndex+1]...),
+				CommandIDPath: append([]string(nil), commandIDPath[:scopeIndex+1]...),
+				ID:            option.id,
+				Label:         optionLabel(option),
+				Description:   optionDescription(option),
+				sensitive:     option.sensitive,
+				deprecation:   option.deprecation,
+			})
+		}
+	}
 	for _, group := range command.optionGroups {
+		hidden := false
+		for _, id := range group.options {
+			if option := command.optionByID(id); option == nil || option.hidden {
+				hidden = true
+				break
+			}
+		}
+		if hidden {
+			continue
+		}
 		metadata := HelpOptionGroup{
 			ID:       group.id,
 			Kind:     group.kind,
@@ -434,7 +633,7 @@ func (c *Command) HelpDocument(path []string) (HelpDocument, error) {
 	for _, section := range command.helpSections {
 		document.sections = append(document.sections, cloneHelpSection(section))
 	}
-	return document, nil
+	return document
 }
 
 func helpUsageVariants(command *Command, path, commandIDPath []string) []HelpUsageVariant {
@@ -446,7 +645,7 @@ func helpUsageVariants(command *Command, path, commandIDPath []string) []HelpUsa
 	}
 	switch command.subcommandUsage {
 	case SubcommandUsageAuto:
-		if len(command.subcommands) > 0 && !command.subcommandRequired {
+		if hasVisibleSubcommand(command) && !command.subcommandRequired {
 			variants = append(variants, newHelpUsageVariant(
 				commandIDPath,
 				"subcommand",
@@ -456,6 +655,9 @@ func helpUsageVariants(command *Command, path, commandIDPath []string) []HelpUsa
 		}
 	case SubcommandUsageExpanded:
 		for _, child := range command.subcommands {
+			if child.hidden {
+				continue
+			}
 			childIDPath := append(append([]string(nil), commandIDPath...), child.id)
 			variants = append(
 				variants,
@@ -464,6 +666,15 @@ func helpUsageVariants(command *Command, path, commandIDPath []string) []HelpUsa
 		}
 	}
 	return variants
+}
+
+func hasVisibleSubcommand(command *Command) bool {
+	for _, child := range command.subcommands {
+		if !child.hidden {
+			return true
+		}
+	}
+	return false
 }
 
 func directHelpUsageVariants(
@@ -544,6 +755,14 @@ func renderHelpEntries(output *strings.Builder, entries []HelpEntry) {
 		labelWidth := nagitext.Width(entry.Label, nagitext.ModernWidth())
 		output.WriteString(strings.Repeat(" ", width-labelWidth+2))
 		output.WriteString(entry.Description)
+		if entry.deprecation.configured {
+			if entry.Description != "" {
+				output.WriteByte(' ')
+			}
+			output.WriteString("[deprecated: use ")
+			output.WriteString(entry.deprecation.replacement)
+			output.WriteByte(']')
+		}
 		output.WriteByte('\n')
 	}
 }

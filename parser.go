@@ -17,8 +17,10 @@ type invocationValue struct {
 }
 
 type invocationDefinition struct {
-	kind     OptionKind
-	repeated bool
+	kind      OptionKind
+	repeated  bool
+	sensitive bool
+	argument  bool
 }
 
 type invocationScopeData struct {
@@ -40,10 +42,11 @@ type InvocationScope struct {
 // Validators temporarily use their defining Command as current; handlers and
 // returned Invocations use the selected leaf
 type Invocation struct {
-	commandPath   []string
-	commandIDPath []string
-	scopes        []invocationScopeData
-	currentScope  int
+	commandPath        []string
+	commandIDPath      []string
+	scopes             []invocationScopeData
+	currentScope       int
+	deprecationNotices []DeprecationNotice
 }
 
 // CommandPath returns a copy of the canonical root-to-leaf path
@@ -54,6 +57,20 @@ func (i *Invocation) CommandPath() []string {
 // CommandIDPath returns a copy of the stable root-to-leaf command-ID path
 func (i *Invocation) CommandIDPath() []string {
 	return append([]string(nil), i.commandIDPath...)
+}
+
+// DeprecationNotices returns deprecated Command and Option uses in
+// deterministic first-use order
+//
+// A deprecated root Command comes first. Subsequent targets follow their first
+// successful argv occurrence. Each stable target occurs at most once.
+// Environment, external, and default value resolution do not produce notices
+func (i *Invocation) DeprecationNotices() []DeprecationNotice {
+	notices := make([]DeprecationNotice, len(i.deprecationNotices))
+	for index, notice := range i.deprecationNotices {
+		notices[index] = cloneDeprecationNotice(notice)
+	}
+	return notices
 }
 
 // ValueScopeIDPath returns the current stable path where unqualified lookup
@@ -144,6 +161,13 @@ func (i *Invocation) IsRepeated(id string) bool {
 	return declared && definition.kind == OptionValue && definition.repeated
 }
 
+// ValueIsSensitive reports whether the nearest visible Value declaration is
+// Sensitive
+func (i *Invocation) ValueIsSensitive(id string) bool {
+	definition, _, declared, _ := i.lookup(id)
+	return declared && definition.kind == OptionValue && definition.sensitive
+}
+
 // ValueIDs returns sorted visible IDs that have a value
 func (i *Invocation) ValueIDs() []string {
 	seen := map[string]struct{}{}
@@ -175,6 +199,36 @@ func (i *Invocation) lookup(id string) (invocationDefinition, invocationValue, b
 		return definition, value, true, present
 	}
 	return invocationDefinition{}, invocationValue{}, false, false
+}
+
+func (i *Invocation) markSensitiveTarget(target DiagnosticTarget) DiagnosticTarget {
+	if target.kind == TargetResponseFile {
+		return target
+	}
+	scopeIndex := -1
+	if len(target.commandIDPath) == 0 {
+		scopeIndex = i.currentScope
+	} else {
+		for index := range i.scopes {
+			if equalPath(i.commandIDPath[:index+1], target.commandIDPath) {
+				scopeIndex = index
+				break
+			}
+		}
+	}
+	if scopeIndex < 0 {
+		return target
+	}
+	definition, declared := i.scopes[scopeIndex].definitions[target.valueID]
+	if !declared {
+		return target
+	}
+	targetIsArgument := target.kind == TargetArgument
+	return target.withSensitive(
+		definition.kind == OptionValue &&
+			definition.argument == targetIsArgument &&
+			definition.sensitive,
+	)
 }
 
 // CommandPath returns the canonical path prefix for this exact scope
@@ -254,6 +308,12 @@ func (s InvocationScope) RawValue(id string) (string, bool) {
 func (s InvocationScope) IsRepeated(id string) bool {
 	definition, _, declared, _ := s.lookup(id)
 	return declared && definition.kind == OptionValue && definition.repeated
+}
+
+// ValueIsSensitive reports whether one local Value declaration is Sensitive
+func (s InvocationScope) ValueIsSensitive(id string) bool {
+	definition, _, declared, _ := s.lookup(id)
+	return declared && definition.kind == OptionValue && definition.sensitive
 }
 
 // ValueIDs returns sorted local IDs that have a value
@@ -352,9 +412,38 @@ func (c *Command) Parse(arguments []string) (ParseResult, error) {
 
 // ParseWithEnvironment parses argv and injected environment values
 func (c *Command) ParseWithEnvironment(arguments []string, environment map[string]string) (ParseResult, error) {
+	return c.parseWithOptionalValueResolver(arguments, environment, nil)
+}
+
+// ParseWithValueResolver parses argv, environment, and application-owned fallbacks
+//
+// The resolver is called only for selected Value Options that have no
+// command-line or environment value. A nil resolver behaves like
+// ParseWithEnvironment
+func (c *Command) ParseWithValueResolver(
+	arguments []string,
+	environment map[string]string,
+	resolver ValueResolver,
+) (ParseResult, error) {
+	return c.parseWithOptionalValueResolver(arguments, environment, resolver)
+}
+
+func (c *Command) parseWithOptionalValueResolver(
+	arguments []string,
+	environment map[string]string,
+	resolver ValueResolver,
+) (ParseResult, error) {
 	if err := c.Validate(); err != nil {
 		return ParseResult{}, err
 	}
+	return c.parseValidatedWithOptionalValueResolver(arguments, environment, resolver)
+}
+
+func (c *Command) parseValidatedWithOptionalValueResolver(
+	arguments []string,
+	environment map[string]string,
+	resolver ValueResolver,
+) (ParseResult, error) {
 	copyEnvironment := make(map[string]string, len(environment))
 	for key, value := range environment {
 		copyEnvironment[key] = value
@@ -363,25 +452,36 @@ func (c *Command) ParseWithEnvironment(arguments []string, environment map[strin
 		root:           c,
 		arguments:      append([]string(nil), arguments...),
 		environment:    copyEnvironment,
+		resolver:       resolver,
 		commands:       []*Command{c},
 		commandPath:    []string{c.name},
 		scopes:         []invocationScopeData{newInvocationScopeData(c)},
 		optionsEnabled: true,
 	}
+	if c.deprecation.configured {
+		parser.pushDeprecationNotice(commandDeprecationNotice(
+			[]string{c.name},
+			[]string{c.id},
+			c.name,
+			c.deprecation,
+		))
+	}
 	return parser.parse()
 }
 
 type argumentParser struct {
-	root              *Command
-	arguments         []string
-	environment       map[string]string
-	index             int
-	commands          []*Command
-	commandPath       []string
-	scopes            []invocationScopeData
-	positionalIndex   int
-	positionalStarted bool
-	optionsEnabled    bool
+	root               *Command
+	arguments          []string
+	environment        map[string]string
+	resolver           ValueResolver
+	index              int
+	commands           []*Command
+	commandPath        []string
+	scopes             []invocationScopeData
+	positionalIndex    int
+	positionalStarted  bool
+	optionsEnabled     bool
+	deprecationNotices []DeprecationNotice
 }
 
 func (p *argumentParser) parse() (ParseResult, error) {
@@ -413,20 +513,19 @@ func (p *argumentParser) parse() (ParseResult, error) {
 			p.index++
 		}
 	}
-	if err := p.resolveFallbacks(); err != nil {
+	selectedCommandIDPath := p.currentCommandIDPath()
+	if err := p.resolveFallbacks(selectedCommandIDPath); err != nil {
 		return ParseResult{}, err
 	}
 	if err := p.validateValues(); err != nil {
 		return ParseResult{}, err
 	}
 	invocation := &Invocation{
-		commandPath:   append([]string(nil), p.commandPath...),
-		commandIDPath: make([]string, len(p.commands)),
-		scopes:        p.scopes,
-		currentScope:  len(p.scopes) - 1,
-	}
-	for index, command := range p.commands {
-		invocation.commandIDPath[index] = command.id
+		commandPath:        append([]string(nil), p.commandPath...),
+		commandIDPath:      selectedCommandIDPath,
+		scopes:             p.scopes,
+		currentScope:       len(p.scopes) - 1,
+		deprecationNotices: p.deprecationNotices,
 	}
 	if err := p.runValidators(invocation); err != nil {
 		return ParseResult{}, err
@@ -438,10 +537,6 @@ func (p *argumentParser) parse() (ParseResult, error) {
 }
 
 func (p *argumentParser) active() *Command { return p.commands[len(p.commands)-1] }
-
-func (p *argumentParser) activeScope() *invocationScopeData {
-	return &p.scopes[len(p.scopes)-1]
-}
 
 func (p *argumentParser) currentCommandIDPath() []string {
 	path := make([]string, len(p.commands))
@@ -459,15 +554,19 @@ func newInvocationScopeData(command *Command) invocationScopeData {
 	for index := range command.options {
 		option := &command.options[index]
 		scope.definitions[option.id] = invocationDefinition{
-			kind:     option.kind,
-			repeated: option.repeated,
+			kind:      option.kind,
+			repeated:  option.repeated,
+			sensitive: option.sensitive,
+			argument:  false,
 		}
 	}
 	for index := range command.arguments {
 		argument := &command.arguments[index]
 		scope.definitions[argument.id] = invocationDefinition{
-			kind:     OptionValue,
-			repeated: argument.repeated,
+			kind:      OptionValue,
+			repeated:  argument.repeated,
+			sensitive: argument.sensitive,
+			argument:  true,
 		}
 	}
 	return scope
@@ -536,14 +635,7 @@ func (p *argumentParser) parseLong(argument string) (ParseResult, bool, error) {
 			version:       p.root.version,
 		}, true, nil
 	}
-	var option *OptionSpec
-	for index := range p.active().options {
-		candidate := &p.active().options[index]
-		if candidate.long == name {
-			option = candidate
-			break
-		}
-	}
+	scopeIndex, option := p.visibleLongOption(name)
 	if option == nil {
 		return ParseResult{}, false, p.diag(CodeUnknownOption, "unknown option "+quoteValue(argument))
 	}
@@ -552,8 +644,18 @@ func (p *argumentParser) parseLong(argument string) (ParseResult, bool, error) {
 	if hasAttached {
 		value = &attached
 	}
-	if err := p.applyOption(option, value); err != nil {
+	firstOccurrence, err := p.applyOption(scopeIndex, option, value)
+	if err != nil {
 		return ParseResult{}, false, err
+	}
+	if firstOccurrence && option.deprecation.configured {
+		p.pushDeprecationNotice(optionDeprecationNotice(
+			p.commandPath,
+			p.commandIDPath(scopeIndex),
+			option.id,
+			"--"+name,
+			option.deprecation,
+		))
 	}
 	return ParseResult{}, false, nil
 }
@@ -580,14 +682,7 @@ func (p *argumentParser) parseShort(argument string) (ParseResult, bool, error) 
 				version:       p.root.version,
 			}, true, nil
 		}
-		var option *OptionSpec
-		for index := range p.active().options {
-			candidate := &p.active().options[index]
-			if candidate.short == short {
-				option = candidate
-				break
-			}
-		}
+		scopeIndex, option := p.visibleShortOption(short)
 		if option == nil {
 			return ParseResult{}, false, p.diag(CodeUnknownOption, fmt.Sprintf("unknown option '-%c'", short))
 		}
@@ -597,87 +692,135 @@ func (p *argumentParser) parseShort(argument string) (ParseResult, bool, error) 
 				value := argument[offset+1:]
 				attached = &value
 			}
-			if err := p.applyOption(option, attached); err != nil {
+			firstOccurrence, err := p.applyOption(scopeIndex, option, attached)
+			if err != nil {
 				return ParseResult{}, false, err
+			}
+			if firstOccurrence && option.deprecation.configured {
+				p.recordOptionDeprecation(scopeIndex, option, fmt.Sprintf("-%c", short))
 			}
 			return ParseResult{}, false, nil
 		}
-		if err := p.applyOption(option, nil); err != nil {
+		firstOccurrence, err := p.applyOption(scopeIndex, option, nil)
+		if err != nil {
 			return ParseResult{}, false, err
+		}
+		if firstOccurrence && option.deprecation.configured {
+			p.recordOptionDeprecation(scopeIndex, option, fmt.Sprintf("-%c", short))
 		}
 	}
 	return ParseResult{}, false, nil
 }
 
-func (p *argumentParser) applyOption(option *OptionSpec, attached *string) error {
-	values := p.activeScope().values
+func (p *argumentParser) applyOption(
+	scopeIndex int,
+	option *OptionSpec,
+	attached *string,
+) (bool, error) {
+	values := p.scopes[scopeIndex].values
+	target := func() DiagnosticTarget {
+		return OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(scopeIndex)...)
+	}
 	switch option.kind {
 	case OptionFlag:
 		if attached != nil {
-			return p.diagTargets(
+			return false, p.diagTargets(
 				CodeUnexpectedOptionValue,
 				fmt.Sprintf("option %q does not take a value", optionDisplay(option)),
-				OptionTarget(option.id),
+				target(),
 			)
 		}
 		if _, duplicate := values[option.id]; duplicate {
-			return p.diagTargets(
+			return false, p.diagTargets(
 				CodeDuplicateOption,
 				fmt.Sprintf("option %q was provided more than once", optionDisplay(option)),
-				OptionTarget(option.id),
+				target(),
 			)
 		}
 		values[option.id] = invocationValue{kind: OptionFlag, flag: true, supplied: true}
+		return true, nil
 	case OptionCount:
 		if attached != nil {
-			return p.diagTargets(
+			return false, p.diagTargets(
 				CodeUnexpectedOptionValue,
 				fmt.Sprintf("option %q does not take a value", optionDisplay(option)),
-				OptionTarget(option.id),
+				target(),
 			)
 		}
-		value := values[option.id]
+		value, duplicate := values[option.id]
 		value.kind = OptionCount
 		value.supplied = true
 		if value.count != math.MaxUint64 {
 			value.count++
 		}
 		values[option.id] = value
+		return !duplicate, nil
 	case OptionValue:
 		var raw string
 		if attached != nil {
 			raw = *attached
 		} else {
 			if p.index >= len(p.arguments) {
-				return p.diagTargets(
+				return false, p.diagTargets(
 					CodeMissingOptionValue,
 					fmt.Sprintf("option %q requires a value", optionDisplay(option)),
-					OptionTarget(option.id),
+					target(),
 				)
 			}
 			raw = p.arguments[p.index]
 			p.index++
 		}
 		if _, duplicate := values[option.id]; duplicate && !option.repeated {
-			return p.diagTargets(
+			return false, p.diagTargets(
 				CodeDuplicateOption,
 				fmt.Sprintf("option %q was provided more than once", optionDisplay(option)),
-				OptionTarget(option.id),
+				target(),
 			)
 		}
+		_, duplicate := values[option.id]
 		value, err := p.parseValue(
 			option.id,
 			option.parser,
 			raw,
-			SourceCommandLine,
-			OptionTarget(option.id),
+			commandLineValueOrigin(),
+			option.sensitive,
+			target(),
 		)
 		if err != nil {
-			return err
+			return false, err
 		}
-		p.pushValue(len(p.scopes)-1, option.id, value, option.repeated)
+		p.pushValue(scopeIndex, option.id, value, option.repeated)
+		return !duplicate, nil
 	}
-	return nil
+	return false, nil
+}
+
+func (p *argumentParser) visibleLongOption(name string) (int, *OptionSpec) {
+	activeIndex := len(p.commands) - 1
+	for scopeIndex := activeIndex; scopeIndex >= 0; scopeIndex-- {
+		command := p.commands[scopeIndex]
+		for optionIndex := range command.options {
+			option := &command.options[optionIndex]
+			if option.long == name && (scopeIndex == activeIndex || option.inherited) {
+				return scopeIndex, option
+			}
+		}
+	}
+	return 0, nil
+}
+
+func (p *argumentParser) visibleShortOption(short byte) (int, *OptionSpec) {
+	activeIndex := len(p.commands) - 1
+	for scopeIndex := activeIndex; scopeIndex >= 0; scopeIndex-- {
+		command := p.commands[scopeIndex]
+		for optionIndex := range command.options {
+			option := &command.options[optionIndex]
+			if option.short == short && (scopeIndex == activeIndex || option.inherited) {
+				return scopeIndex, option
+			}
+		}
+	}
+	return 0, nil
 }
 
 func (p *argumentParser) selectSubcommand(argument string) bool {
@@ -688,6 +831,7 @@ func (p *argumentParser) selectSubcommand(argument string) bool {
 			p.scopes = append(p.scopes, newInvocationScopeData(command))
 			p.positionalIndex = 0
 			p.positionalStarted = false
+			p.recordCommandDeprecation(command, argument)
 			return true
 		}
 		for _, alias := range command.aliases {
@@ -697,11 +841,51 @@ func (p *argumentParser) selectSubcommand(argument string) bool {
 				p.scopes = append(p.scopes, newInvocationScopeData(command))
 				p.positionalIndex = 0
 				p.positionalStarted = false
+				p.recordCommandDeprecation(command, argument)
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func (p *argumentParser) recordCommandDeprecation(command *Command, spelling string) {
+	if !command.deprecation.configured {
+		return
+	}
+	p.pushDeprecationNotice(commandDeprecationNotice(
+		p.commandPath,
+		p.currentCommandIDPath(),
+		spelling,
+		command.deprecation,
+	))
+}
+
+func (p *argumentParser) recordOptionDeprecation(
+	scopeIndex int,
+	option *OptionSpec,
+	spelling string,
+) {
+	if !option.deprecation.configured {
+		return
+	}
+	p.pushDeprecationNotice(optionDeprecationNotice(
+		p.commandPath,
+		p.commandIDPath(scopeIndex),
+		option.id,
+		spelling,
+		option.deprecation,
+	))
+}
+
+func (p *argumentParser) pushDeprecationNotice(notice DeprecationNotice) {
+	p.deprecationNotices = append(p.deprecationNotices, notice)
+}
+
+func cloneDeprecationNotice(notice DeprecationNotice) DeprecationNotice {
+	notice.commandPath = append([]string(nil), notice.commandPath...)
+	notice.commandIDPath = append([]string(nil), notice.commandIDPath...)
+	return notice
 }
 
 func (p *argumentParser) parsePositional(raw string) error {
@@ -718,7 +902,8 @@ func (p *argumentParser) parsePositional(raw string) error {
 		argument.id,
 		argument.parser,
 		raw,
-		SourceCommandLine,
+		commandLineValueOrigin(),
+		argument.sensitive,
 		ArgumentTarget(argument.id),
 	)
 	if err != nil {
@@ -731,7 +916,7 @@ func (p *argumentParser) parsePositional(raw string) error {
 	return nil
 }
 
-func (p *argumentParser) resolveFallbacks() error {
+func (p *argumentParser) resolveFallbacks(selectedCommandIDPath []string) error {
 	for commandIndex, command := range p.commands {
 		values := p.scopes[commandIndex].values
 		for index := range command.options {
@@ -742,33 +927,154 @@ func (p *argumentParser) resolveFallbacks() error {
 			if _, present := values[option.id]; present {
 				continue
 			}
-			raw, source, present := "", SourceDefault, false
 			if option.environment != "" {
-				raw, present = p.environment[option.environment]
+				raw, present := p.environment[option.environment]
 				if present {
-					source = SourceEnvironment
+					origin := environmentValueOrigin(option.environment)
+					value, err := p.parseValue(
+						option.id,
+						option.parser,
+						raw,
+						origin,
+						option.sensitive,
+						OptionTarget(option.id).
+							WithCommandIDPath(p.commandIDPath(commandIndex)...).
+							withValueOrigin(origin),
+					)
+					if err != nil {
+						return err
+					}
+					p.pushValue(commandIndex, option.id, value, option.repeated)
+					continue
 				}
 			}
-			if !present && option.defaultSet {
-				raw, source, present = option.defaultVal, SourceDefault, true
+			if p.resolver != nil {
+				resolution, diagnostic := p.resolver(ValueResolutionRequest{
+					selectedCommandPath:   p.commandPath,
+					selectedCommandIDPath: selectedCommandIDPath,
+					commandPath:           p.commandPath[:commandIndex+1],
+					commandIDPath:         selectedCommandIDPath[:commandIndex+1],
+					valueID:               option.id,
+					repeated:              option.repeated,
+					sensitive:             option.sensitive,
+				})
+				if diagnostic != nil {
+					return p.resolverDiagnostic(diagnostic, commandIndex, option.id)
+				}
+				if resolution.resolved {
+					if err := p.applyExternalResolution(commandIndex, option, resolution); err != nil {
+						return err
+					}
+					continue
+				}
 			}
-			if !present {
-				continue
+			if option.defaultSet {
+				origin := defaultValueOrigin()
+				value, err := p.parseValue(
+					option.id,
+					option.parser,
+					option.defaultVal,
+					origin,
+					option.sensitive,
+					OptionTarget(option.id).
+						WithCommandIDPath(p.commandIDPath(commandIndex)...).
+						withValueOrigin(origin),
+				)
+				if err != nil {
+					return err
+				}
+				p.pushValue(commandIndex, option.id, value, option.repeated)
 			}
-			value, err := p.parseValue(
-				option.id,
-				option.parser,
-				raw,
-				source,
-				OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
-			)
-			if err != nil {
-				return err
-			}
-			p.pushValue(commandIndex, option.id, value, option.repeated)
 		}
 	}
 	return nil
+}
+
+func (p *argumentParser) applyExternalResolution(
+	commandIndex int,
+	option *OptionSpec,
+	resolution ValueResolution,
+) error {
+	if !validID(resolution.sourceIdentity) {
+		return p.diagTargets(
+			CodeInvalidSpecification,
+			fmt.Sprintf("Value Resolver returned an invalid source identity for %q", option.id),
+			OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+		)
+	}
+	if len(resolution.values) == 0 {
+		return p.diagTargets(
+			CodeInvalidSpecification,
+			fmt.Sprintf("Value Resolver returned an empty resolved result for %q", option.id),
+			OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+		)
+	}
+	if resolution.mode != ValueResolutionReplace && resolution.mode != ValueResolutionMerge {
+		return p.diagTargets(
+			CodeInvalidSpecification,
+			fmt.Sprintf("Value Resolver returned an invalid mode for %q", option.id),
+			OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+		)
+	}
+	if !option.repeated && (len(resolution.values) != 1 || resolution.mode != ValueResolutionReplace) {
+		return p.diagTargets(
+			CodeInvalidSpecification,
+			fmt.Sprintf("Value Resolver returned repeated or merged values for non-repeated %q", option.id),
+			OptionTarget(option.id).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+		)
+	}
+
+	for _, raw := range resolution.values {
+		origin := externalValueOrigin(resolution.sourceIdentity)
+		value, err := p.parseValue(
+			option.id,
+			option.parser,
+			raw,
+			origin,
+			option.sensitive,
+			OptionTarget(option.id).
+				WithCommandIDPath(p.commandIDPath(commandIndex)...).
+				withValueOrigin(origin),
+		)
+		if err != nil {
+			return err
+		}
+		p.pushValue(commandIndex, option.id, value, option.repeated)
+	}
+	if resolution.mode == ValueResolutionMerge && option.defaultSet {
+		origin := defaultValueOrigin()
+		value, err := p.parseValue(
+			option.id,
+			option.parser,
+			option.defaultVal,
+			origin,
+			option.sensitive,
+			OptionTarget(option.id).
+				WithCommandIDPath(p.commandIDPath(commandIndex)...).
+				withValueOrigin(origin),
+		)
+		if err != nil {
+			return err
+		}
+		p.pushValue(commandIndex, option.id, value, option.repeated)
+	}
+	return nil
+}
+
+func (p *argumentParser) resolverDiagnostic(
+	diagnostic *Diagnostic,
+	commandIndex int,
+	valueID string,
+) *Diagnostic {
+	if len(diagnostic.targets) == 0 {
+		diagnostic.WithTarget(
+			OptionTarget(valueID).WithCommandIDPath(p.commandIDPath(commandIndex)...),
+		)
+	}
+	return diagnostic.
+		withDefaultTargetPath(p.commandIDPath(commandIndex)).
+		mapTargets(p.markSensitiveTarget).
+		withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
 }
 
 func (p *argumentParser) validateValues() error {
@@ -882,6 +1188,7 @@ func (p *argumentParser) runValidators(invocation *Invocation) error {
 			}
 			return diagnostic.
 				withDefaultTargetPath(invocation.commandIDPath[:commandIndex+1]).
+				mapTargets(invocation.markSensitiveTarget).
 				withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
 		}
 	}
@@ -892,18 +1199,24 @@ func (p *argumentParser) parseValue(
 	id string,
 	parser ValueParser,
 	raw string,
-	source ValueSource,
+	origin ValueOrigin,
+	sensitive bool,
 	target DiagnosticTarget,
 ) (ParsedValue, error) {
+	target = target.withValueOrigin(origin)
 	typed, err := parser.Parse(raw)
 	if err != nil {
+		message := fmt.Sprintf("invalid value %s for '%s': %s", quoteValue(raw), id, err)
+		if sensitive {
+			message = fmt.Sprintf("invalid value %s for '%s'", RedactedValue, id)
+		}
 		return ParsedValue{}, p.diagTargets(
 			CodeInvalidValue,
-			fmt.Sprintf("invalid value %s for %q: %s", quoteValue(raw), id, err),
+			message,
 			target,
 		)
 	}
-	return ParsedValue{raw: raw, source: source, typed: typed}, nil
+	return ParsedValue{raw: raw, origin: origin, typed: typed, sensitive: sensitive}, nil
 }
 
 func (p *argumentParser) pushValue(scopeIndex int, id string, parsed ParsedValue, repeated bool) {
@@ -936,9 +1249,49 @@ func (p *argumentParser) diagTargets(
 ) *Diagnostic {
 	diagnostic := NewDiagnostic(code, message)
 	for _, target := range targets {
-		diagnostic.WithTarget(target)
+		diagnostic.WithTarget(p.markSensitiveTarget(target))
 	}
 	return diagnostic.
 		withDefaultTargetPath(p.currentCommandIDPath()).
 		withCommand(p.commandPath, p.root.usageForPath(p.commandPath))
+}
+
+func (p *argumentParser) markSensitiveTarget(target DiagnosticTarget) DiagnosticTarget {
+	scopeIndex := -1
+	if len(target.commandIDPath) == 0 {
+		scopeIndex = len(p.commands) - 1
+	} else {
+		for index := range p.commands {
+			if equalPath(p.commandIDPath(index), target.commandIDPath) {
+				scopeIndex = index
+				break
+			}
+		}
+	}
+	if scopeIndex < 0 {
+		return target
+	}
+	command := p.commands[scopeIndex]
+	sensitive := false
+	switch target.kind {
+	case TargetOption:
+		for index := range command.options {
+			option := &command.options[index]
+			if option.id == target.valueID {
+				sensitive = option.sensitive
+				break
+			}
+		}
+	case TargetArgument:
+		for index := range command.arguments {
+			argument := &command.arguments[index]
+			if argument.id == target.valueID {
+				sensitive = argument.sensitive
+				break
+			}
+		}
+	case TargetResponseFile:
+		return target
+	}
+	return target.withSensitive(sensitive)
 }

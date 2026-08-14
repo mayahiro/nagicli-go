@@ -48,6 +48,150 @@ func TestParentOptionsAreNotRecognizedAfterChildSelection(t *testing.T) {
 	assertDiagnosticCode(t, err, cli.CodeUnknownOption)
 }
 
+func TestHelpDocumentsVisitVisiblePreorderAndStopEarly(t *testing.T) {
+	command := cli.NewCommand("root").
+		Subcommand(
+			cli.NewCommand("alpha").
+				Subcommand(cli.NewCommand("alpha-child")).
+				Subcommand(
+					cli.NewCommand("alpha-hidden").
+						Hidden().
+						Subcommand(cli.NewCommand("hidden-descendant")),
+				),
+		).
+		Subcommand(cli.NewCommand("beta"))
+
+	var paths []string
+	if err := command.VisitHelpDocuments(func(document cli.HelpDocument) bool {
+		paths = append(paths, strings.Join(document.CommandPath(), "/"))
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"root", "root/alpha", "root/alpha/alpha-child", "root/beta"}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+
+	var stopped []string
+	if err := command.VisitHelpDocuments(func(document cli.HelpDocument) bool {
+		stopped = append(stopped, strings.Join(document.CommandPath(), "/"))
+		return len(stopped) < 2
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"root", "root/alpha"}; !slices.Equal(stopped, want) {
+		t.Fatalf("stopped = %v, want %v", stopped, want)
+	}
+
+	err := command.VisitHelpDocuments(nil)
+	assertDiagnosticCode(t, err, cli.CodeInvalidSpecification)
+
+	direct, err := command.HelpDocument([]string{"root", "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visited cli.HelpDocument
+	if err := command.VisitHelpDocuments(func(document cli.HelpDocument) bool {
+		if slices.Equal(document.CommandPath(), []string{"root", "alpha"}) {
+			visited = document
+		}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	renderer := cli.PlainHelpRenderer{}
+	if got, want := renderer.RenderHelp(visited), renderer.RenderHelp(direct); got != want {
+		t.Fatalf("visited Help = %q, want %q", got, want)
+	}
+}
+
+func TestInheritedOptionsKeepDeclarationScopeValidation(t *testing.T) {
+	required := cli.NewCommand("root").
+		ID("root-id").
+		Option(cli.ValueOption("token").Long("token").Required().Inherited()).
+		Subcommand(cli.NewCommand("run").ID("run-id"))
+	_, err := required.Parse([]string{"run"})
+	assertDiagnosticCode(t, err, cli.CodeMissingRequired)
+	var requiredDiagnostic *cli.Diagnostic
+	if !errors.As(err, &requiredDiagnostic) ||
+		!slices.Equal(requiredDiagnostic.Targets()[0].CommandIDPath(), []string{"root-id"}) {
+		t.Fatalf("required target = %v", err)
+	}
+
+	command := cli.NewCommand("root").
+		ID("root-id").
+		Option(cli.ValueOption("credential").Long("credential").Inherited()).
+		Option(cli.Flag("authorize").Long("authorize").Requires("credential").Inherited()).
+		Option(cli.Flag("json").Long("json").Inherited()).
+		Option(cli.Flag("yaml").Long("yaml").Inherited()).
+		OptionGroup(cli.AtMostOne("format", "json", "yaml")).
+		Validator(func(invocation *cli.Invocation) *cli.Diagnostic {
+			if !slices.Equal(invocation.ValueScopeIDPath(), []string{"root-id"}) {
+				panic("root validator received another current scope")
+			}
+			if credential, _ := invocation.RawValue("credential"); credential == "blocked" {
+				return cli.NewDiagnostic(cli.CodeValidation, "credential is blocked").
+					WithTarget(cli.OptionTarget("credential"))
+			}
+			return nil
+		}).
+		Subcommand(cli.NewCommand("run").ID("run-id"))
+
+	_, err = command.Parse([]string{"run", "--authorize"})
+	assertDiagnosticCode(t, err, cli.CodeRequires)
+	var relationDiagnostic *cli.Diagnostic
+	if !errors.As(err, &relationDiagnostic) {
+		t.Fatal(err)
+	}
+	for _, target := range relationDiagnostic.Targets() {
+		if !slices.Equal(target.CommandIDPath(), []string{"root-id"}) {
+			t.Fatalf("relation target path = %v", target.CommandIDPath())
+		}
+	}
+
+	result, err := command.Parse([]string{"--credential", "allowed", "run", "--authorize"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, ok := result.Invocation().Scope("root-id")
+	credential, credentialPresent := root.RawValue("credential")
+	authorize, authorizePresent := root.Flag("authorize")
+	if !ok || !credentialPresent || credential != "allowed" || !authorizePresent || !authorize {
+		t.Fatalf("root scope = %+v, %t", root, ok)
+	}
+
+	_, err = command.Parse([]string{"run", "--json", "--yaml"})
+	assertDiagnosticCode(t, err, cli.CodeOptionGroup)
+	var groupDiagnostic *cli.Diagnostic
+	if !errors.As(err, &groupDiagnostic) {
+		t.Fatal(err)
+	}
+	for _, target := range groupDiagnostic.Targets() {
+		if !slices.Equal(target.CommandIDPath(), []string{"root-id"}) {
+			t.Fatalf("group target path = %v", target.CommandIDPath())
+		}
+	}
+
+	_, err = command.Parse([]string{"run", "--credential", "blocked"})
+	assertDiagnosticCode(t, err, cli.CodeValidation)
+	var validationDiagnostic *cli.Diagnostic
+	if !errors.As(err, &validationDiagnostic) ||
+		!slices.Equal(validationDiagnostic.Targets()[0].CommandIDPath(), []string{"root-id"}) {
+		t.Fatalf("validation target = %v", err)
+	}
+
+	document, err := command.HelpDocument([]string{"root", "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(document.OptionRelations()) != 0 || len(document.OptionGroups()) != 0 ||
+		len(document.InheritedOptions()) != 4 {
+		t.Fatalf("child Help metadata = relations:%v groups:%v inherited:%v",
+			document.OptionRelations(), document.OptionGroups(), document.InheritedOptions())
+	}
+}
+
 func TestCommandLocalValueScopes(t *testing.T) {
 	var rootValue, childValue string
 	command := cli.NewCommand("root").

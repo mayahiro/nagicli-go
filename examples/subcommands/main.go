@@ -12,13 +12,20 @@ func application() *cli.Command {
 	return cli.NewCommand("service").
 		ID("service-root").
 		About("Manage a service").
-		Version("0.3.2").
+		Version("0.4.0").
 		Option(
 			cli.ValueOption("profile").
 				Long("profile").
 				Parser(cli.StringParser()).
 				Default("default").
 				Help("Root configuration profile"),
+		).
+		Option(
+			cli.Count("verbose").
+				Long("verbose").
+				Short('v').
+				Help("Increase verbosity").
+				Inherited(),
 		).
 		RequireSubcommand().
 		SubcommandUsage(cli.SubcommandUsageExpanded).
@@ -34,7 +41,6 @@ func application() *cli.Command {
 						Default("service").
 						Help("Service profile"),
 				).
-				Option(cli.Count("verbose").Long("verbose").Short('v').Help("Increase verbosity")).
 				Validator(func(invocation *cli.Invocation) *cli.Diagnostic {
 					profile, accessErr := cli.RequireValueAs[string](invocation, "profile")
 					if accessErr != nil {

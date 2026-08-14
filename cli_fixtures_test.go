@@ -81,6 +81,70 @@ func TestCommandLocalScopesMatchSharedFixtures(t *testing.T) {
 	}
 }
 
+func TestInheritedOptionsMatchSharedFixtures(t *testing.T) {
+	records := loadFixtures(
+		t,
+		"cli/inherited-options.txt",
+		"cli-inherited-options",
+		"argv",
+		"env",
+		"expected",
+	)
+	command := inheritedFixtureCommand()
+	for _, record := range records {
+		record := record
+		t.Run(record.ID, func(t *testing.T) {
+			result, err := command.ParseWithEnvironment(
+				arguments(record.Bytes("argv")),
+				environment(record.Bytes("env")),
+			)
+			var snapshot string
+			if err == nil {
+				if result.Kind() != cli.ParseInvocation {
+					t.Fatalf("result kind = %v, want Invocation", result.Kind())
+				}
+				snapshot = snapshotScopedInvocation(result.Invocation())
+			} else {
+				var diagnostic *cli.Diagnostic
+				if !errors.As(err, &diagnostic) {
+					t.Fatalf("error = %v, want Diagnostic", err)
+				}
+				snapshot = snapshotInheritedError(diagnostic)
+			}
+			if want := record.Field("expected"); snapshot != want {
+				t.Fatalf("snapshot = %q, want %q", snapshot, want)
+			}
+		})
+	}
+}
+
+func TestInheritedOptionValidationMatchesSharedFixtures(t *testing.T) {
+	records := loadFixtures(
+		t,
+		"cli/inherited-option-validation.txt",
+		"cli-inherited-option-validation",
+		"shape",
+		"expected",
+	)
+	for _, record := range records {
+		record := record
+		t.Run(record.ID, func(t *testing.T) {
+			err := inheritedValidationCommand(record.Field("shape")).Validate()
+			snapshot := "ok"
+			if err != nil {
+				var diagnostic *cli.Diagnostic
+				if !errors.As(err, &diagnostic) {
+					t.Fatalf("error = %v, want Diagnostic", err)
+				}
+				snapshot = string(diagnostic.Code())
+			}
+			if want := record.Field("expected"); snapshot != want {
+				t.Fatalf("snapshot = %q, want %q", snapshot, want)
+			}
+		})
+	}
+}
+
 func TestErrorsMatchSharedFixtures(t *testing.T) {
 	records := loadFixtures(
 		t,
@@ -233,6 +297,49 @@ func TestHelpPresentationMatchesSharedFixtures(t *testing.T) {
 	}
 }
 
+func TestInheritedOptionHelpMatchesSharedFixtures(t *testing.T) {
+	records := loadFixtures(
+		t,
+		"cli/inherited-option-help.txt",
+		"cli-inherited-option-help",
+		"path",
+		"structured",
+		"expected",
+	)
+	command := inheritedHelpCommand()
+	for _, record := range records {
+		record := record
+		t.Run(record.ID, func(t *testing.T) {
+			commandPath := []string{"root"}
+			commandPath = append(commandPath, strings.Split(record.Field("path"), "/")...)
+			document, err := command.HelpDocument(commandPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries := make([]string, 0, len(document.InheritedOptions()))
+			for _, option := range document.InheritedOptions() {
+				entries = append(entries, fmt.Sprintf(
+					"%s@%s:%s=%s",
+					strings.Join(option.CommandIDPath, "/"),
+					strings.Join(option.CommandPath, "/"),
+					option.ID,
+					option.Label,
+				))
+			}
+			if got, want := strings.Join(entries, "|"), record.Field("structured"); got != want {
+				t.Fatalf("structured = %q, want %q", got, want)
+			}
+			rendered, err := command.RenderHelp(commandPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := record.Text("expected"); rendered != want {
+				t.Fatalf("rendered = %q, want %q", rendered, want)
+			}
+		})
+	}
+}
+
 func TestRuntimeMatchesSharedFixtures(t *testing.T) {
 	records := loadFixtures(
 		t,
@@ -373,6 +480,85 @@ func fixtureCommand() *cli.Command {
 		)
 }
 
+func inheritedFixtureCommand() *cli.Command {
+	return cli.NewCommand("root").
+		ID("root-id").
+		Option(cli.Count("verbose").Long("verbose").Short('v').Inherited()).
+		Option(cli.ValueOption("config").Long("config").Short('c').Environment("NAGI_CONFIG").Default("default").Inherited()).
+		Option(cli.ValueOption("tag").Long("tag").Short('t').Repeated().Inherited()).
+		Option(cli.ValueOption("jobs").Long("jobs").Parser(cli.IntegerParser()).Default("1").Inherited()).
+		Option(cli.Flag("root-only").Long("root-only")).
+		Subcommand(
+			cli.NewCommand("run").
+				ID("run-id").
+				Option(cli.Flag("dry-run").Long("dry-run").Short('n')).
+				Option(cli.ValueOption("profile").Long("profile").Short('p').Inherited()).
+				Argument(cli.Positional("args").Repeated()).
+				Subcommand(cli.NewCommand("exec").ID("exec-id")),
+		)
+}
+
+func inheritedValidationCommand(shape string) *cli.Command {
+	switch shape {
+	case "local-reuse":
+		return cli.NewCommand("root").
+			Option(cli.Flag("root-value").Long("same")).
+			Subcommand(cli.NewCommand("child").Option(cli.Flag("child-value").Long("same")))
+	case "ancestor-local-child-inherited":
+		return cli.NewCommand("root").
+			Option(cli.Flag("root-value").Long("same")).
+			Subcommand(cli.NewCommand("child").Option(cli.Flag("child-value").Long("same").Inherited()))
+	case "ancestor-inherited-child-local-long":
+		return cli.NewCommand("root").
+			Option(cli.Flag("root-value").Long("same").Inherited()).
+			Subcommand(cli.NewCommand("child").Option(cli.Flag("child-value").Long("same")))
+	case "ancestor-inherited-child-local-short":
+		return cli.NewCommand("root").
+			Option(cli.Flag("root-value").Short('s').Inherited()).
+			Subcommand(cli.NewCommand("child").Option(cli.Flag("child-value").Short('s')))
+	case "ancestor-inherited-child-inherited":
+		return cli.NewCommand("root").
+			Option(cli.Flag("root-value").Long("same").Inherited()).
+			Subcommand(cli.NewCommand("child").Option(cli.Flag("child-value").Long("same").Inherited()))
+	case "transitive-collision":
+		return cli.NewCommand("root").
+			Option(cli.Flag("root-value").Long("same").Inherited()).
+			Subcommand(cli.NewCommand("child").Subcommand(
+				cli.NewCommand("grandchild").Option(cli.Flag("grandchild-value").Long("same")),
+			))
+	case "unrelated-siblings":
+		return cli.NewCommand("root").
+			Subcommand(cli.NewCommand("first").Option(cli.Flag("first-value").Long("same").Inherited())).
+			Subcommand(cli.NewCommand("second").Option(cli.Flag("second-value").Long("same").Inherited()))
+	case "same-id-different-spelling":
+		return cli.NewCommand("root").
+			Option(cli.Flag("value").Long("root-value").Inherited()).
+			Subcommand(cli.NewCommand("child").Option(cli.Flag("value").Long("child-value")))
+	default:
+		panic("unknown inherited option validation shape " + shape)
+	}
+}
+
+func inheritedHelpCommand() *cli.Command {
+	return cli.NewCommand("root").
+		ID("root-id").
+		Option(cli.Count("verbose").Long("verbose").Short('v').Help("Increase verbosity").Inherited()).
+		Option(cli.ValueOption("config").Long("config").Short('c').Help("Configuration path").Inherited()).
+		Subcommand(
+			cli.NewCommand("run").
+				ID("run-id").
+				About("Run command").
+				Option(cli.Flag("dry-run").Long("dry-run").Short('n').Help("Dry run")).
+				Option(cli.ValueOption("profile").Long("profile").Short('p').Help("Execution profile").Inherited()).
+				Subcommand(
+					cli.NewCommand("exec").
+						ID("exec-id").
+						About("Execute command").
+						Option(cli.Flag("trace").Long("trace").Short('x').Help("Trace execution")),
+				),
+		)
+}
+
 func runtimeCommand() *cli.Command {
 	return cli.NewCommand("nagi").
 		About("Nagi fixture command").
@@ -487,6 +673,57 @@ func snapshotInvocation(invocation *cli.Invocation) string {
 	return "ok;command=" + strings.Join(invocation.CommandPath(), "/") + ";values=" + strings.Join(values, ",")
 }
 
+func snapshotScopedInvocation(invocation *cli.Invocation) string {
+	scopes := make([]string, 0, len(invocation.Scopes()))
+	for _, scope := range invocation.Scopes() {
+		values := make([]string, 0, len(scope.ValueIDs()))
+		for _, id := range scope.ValueIDs() {
+			if _, ok := scope.Flag(id); ok {
+				values = append(values, id+"=flag")
+				continue
+			}
+			if value, ok := scope.Count(id); ok {
+				values = append(values, fmt.Sprintf("%s=count:%d", id, value))
+				continue
+			}
+			parsed := scope.ParsedValues(id)
+			if !scope.IsRepeated(id) {
+				values = append(values, fmt.Sprintf(
+					"%s=value:%s:%s",
+					id,
+					source(parsed[0].Source()),
+					hex(parsed[0].Raw()),
+				))
+				continue
+			}
+			items := make([]string, 0, len(parsed))
+			for _, value := range parsed {
+				items = append(items, source(value.Source())+":"+hex(value.Raw()))
+			}
+			values = append(values, id+"=values:"+strings.Join(items, "+"))
+		}
+		scopes = append(scopes, strings.Join(scope.CommandIDPath(), "/")+"{"+strings.Join(values, ",")+"}")
+	}
+	return "ok;command=" + strings.Join(invocation.CommandPath(), "/") + ";scopes=" + strings.Join(scopes, "|")
+}
+
+func snapshotInheritedError(diagnostic *cli.Diagnostic) string {
+	targets := make([]string, 0, len(diagnostic.Targets()))
+	for _, target := range diagnostic.Targets() {
+		targets = append(targets, fmt.Sprintf(
+			"%s@%s:%s",
+			target.Kind(),
+			strings.Join(target.CommandIDPath(), "/"),
+			target.ValueID(),
+		))
+	}
+	return fmt.Sprintf(
+		"error;code=%s;targets=%s",
+		diagnostic.Code(),
+		strings.Join(targets, "+"),
+	)
+}
+
 func source(value cli.ValueSource) string {
 	switch value {
 	case cli.SourceCommandLine:
@@ -495,6 +732,8 @@ func source(value cli.ValueSource) string {
 		return "env"
 	case cli.SourceDefault:
 		return "default"
+	case cli.SourceExternal:
+		return "external"
 	default:
 		panic("unknown value source")
 	}

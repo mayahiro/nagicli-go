@@ -11,7 +11,7 @@ import (
 func application() *cli.Command {
 	return cli.NewCommand("greet").
 		About("Print a greeting").
-		Version("0.3.2").
+		Version("0.4.0").
 		UsageVariant("named", "<NAME> [OPTIONS]").
 		Argument(cli.Positional("name").Parser(cli.StringParser()).Required().Help("Name to greet")).
 		Example("named greeting", "greet Nagi").

@@ -22,7 +22,7 @@ const (
 type PresenceBasis uint8
 
 const (
-	// PresenceResolved counts values from command line, environment, or default
+	// PresenceResolved counts command-line, environment, external, or default values
 	PresenceResolved PresenceBasis = iota
 	// PresenceCommandLine counts only values supplied in argv
 	PresenceCommandLine
@@ -55,13 +55,18 @@ type OptionSpec struct {
 	kind        OptionKind
 	parser      ValueParser
 	help        string
+	hidden      bool
+	deprecation Deprecation
+	inherited   bool
 	required    bool
 	repeated    bool
+	sensitive   bool
 	environment string
 	defaultSet  bool
 	defaultVal  string
 	requires    []optionRelation
 	conflicts   []optionRelation
+	completion  CompletionProvider
 }
 
 // Flag constructs a Boolean option
@@ -88,14 +93,46 @@ func (o *OptionSpec) Short(name byte) *OptionSpec { o.short = name; return o }
 // Help sets the option description
 func (o *OptionSpec) Help(help string) *OptionSpec { o.help = help; return o }
 
+// Hidden omits this option from Help, completion, and derived documentation
+// while preserving explicit argv parsing
+func (o *OptionSpec) Hidden() *OptionSpec { o.hidden = true; return o }
+
+// Deprecated marks this option deprecated with an application-provided
+// replacement hint while preserving parsing
+func (o *OptionSpec) Deprecated(replacement string) *OptionSpec {
+	o.deprecation = newDeprecation(replacement)
+	return o
+}
+
+// Inherited makes this option visible in its declaring command and selected
+// descendants. Recognition continues after subcommand selection and
+// positionals until --. Parsed values remain stored in the declaring command
+// scope. Graph validation rejects descendant spelling collisions.
+func (o *OptionSpec) Inherited() *OptionSpec { o.inherited = true; return o }
+
 // Required requires this option after source resolution
 func (o *OptionSpec) Required() *OptionSpec { o.required = true; return o }
 
 // Repeated allows a Value option to appear multiple times
 func (o *OptionSpec) Repeated() *OptionSpec { o.repeated = true; return o }
 
+// Sensitive marks this Value option for redaction in framework-controlled
+// Help, Diagnostic, formatting, and completion projections
+//
+// Parsing and explicit raw or typed value access remain unchanged
+func (o *OptionSpec) Sensitive() *OptionSpec { o.sensitive = true; return o }
+
 // Parser sets the typed Value Parser
 func (o *OptionSpec) Parser(parser ValueParser) *OptionSpec { o.parser = parser; return o }
+
+// CompletionProvider sets the dynamic completion provider for this Value option
+//
+// The provider is only called while this option's value is the active
+// completion target. Parsing and handler execution never call it
+func (o *OptionSpec) CompletionProvider(provider CompletionProvider) *OptionSpec {
+	o.completion = provider
+	return o
+}
 
 // Environment sets an injected environment fallback
 func (o *OptionSpec) Environment(name string) *OptionSpec { o.environment = name; return o }
@@ -145,13 +182,31 @@ func (o *OptionSpec) ID() string { return o.id }
 // Kind returns the option kind
 func (o *OptionSpec) Kind() OptionKind { return o.kind }
 
+// IsInherited reports whether this option is visible in selected descendant
+// commands.
+func (o *OptionSpec) IsInherited() bool { return o.inherited }
+
+// IsHidden reports whether this option is omitted from generated projections
+func (o *OptionSpec) IsHidden() bool { return o.hidden }
+
+// IsSensitive reports whether this Value option requires redaction in
+// framework-controlled projections
+func (o *OptionSpec) IsSensitive() bool { return o.sensitive }
+
+// Deprecation returns replacement metadata when this option is deprecated
+func (o *OptionSpec) Deprecation() (Deprecation, bool) {
+	return o.deprecation, o.deprecation.configured
+}
+
 // Argument defines one positional command value
 type Argument struct {
-	id       string
-	parser   ValueParser
-	help     string
-	required bool
-	repeated bool
+	id         string
+	parser     ValueParser
+	help       string
+	required   bool
+	repeated   bool
+	sensitive  bool
+	completion CompletionProvider
 }
 
 // Positional constructs a raw platform-value positional argument
@@ -162,6 +217,15 @@ func Positional(id string) *Argument {
 // Parser sets the typed Value Parser
 func (a *Argument) Parser(parser ValueParser) *Argument { a.parser = parser; return a }
 
+// CompletionProvider sets the dynamic completion provider for this positional argument
+//
+// The provider is only called while this argument is the active completion
+// target. Parsing and handler execution never call it
+func (a *Argument) CompletionProvider(provider CompletionProvider) *Argument {
+	a.completion = provider
+	return a
+}
+
 // Help sets the positional description
 func (a *Argument) Help(help string) *Argument { a.help = help; return a }
 
@@ -171,8 +235,18 @@ func (a *Argument) Required() *Argument { a.required = true; return a }
 // Repeated allows this final positional to consume remaining values
 func (a *Argument) Repeated() *Argument { a.repeated = true; return a }
 
+// Sensitive marks this positional value for redaction in framework-controlled
+// Help, Diagnostic, formatting, and completion projections
+//
+// Parsing and explicit raw or typed value access remain unchanged
+func (a *Argument) Sensitive() *Argument { a.sensitive = true; return a }
+
 // ID returns the stable value identifier
 func (a *Argument) ID() string { return a.id }
+
+// IsSensitive reports whether this positional value requires redaction in
+// framework-controlled projections
+func (a *Argument) IsSensitive() bool { return a.sensitive }
 
 // OptionGroup applies one cardinality rule to local command options
 type OptionGroup struct {
@@ -255,6 +329,8 @@ type Command struct {
 	name               string
 	aliases            []string
 	about              string
+	hidden             bool
+	deprecation        Deprecation
 	version            string
 	options            []OptionSpec
 	arguments          []Argument
@@ -287,6 +363,17 @@ func (c *Command) Alias(alias string) *Command {
 
 // About sets the short command description
 func (c *Command) About(about string) *Command { c.about = about; return c }
+
+// Hidden omits this command from parent Help, completion, and derived
+// documentation while preserving explicit selection and direct Help
+func (c *Command) Hidden() *Command { c.hidden = true; return c }
+
+// Deprecated marks this command deprecated with an application-provided
+// replacement hint while preserving parsing and handler execution
+func (c *Command) Deprecated(replacement string) *Command {
+	c.deprecation = newDeprecation(replacement)
+	return c
+}
 
 // Version sets the root version used by the built-in version action
 func (c *Command) Version(version string) *Command { c.version = version; return c }
@@ -387,17 +474,44 @@ func (c *Command) Name() string { return c.name }
 // Description returns the short description
 func (c *Command) Description() string { return c.about }
 
-// Validate checks the entire Command Graph before argv is consumed
-func (c *Command) Validate() error {
-	return validateCommand(c, true)
+// IsHidden reports whether this command is omitted from parent projections
+func (c *Command) IsHidden() bool { return c.hidden }
+
+// Deprecation returns replacement metadata when this command is deprecated
+func (c *Command) Deprecation() (Deprecation, bool) {
+	return c.deprecation, c.deprecation.configured
 }
 
-func validateCommand(command *Command, root bool) error {
+// Validate checks the entire Command Graph before argv is consumed
+func (c *Command) Validate() error {
+	return validateCommandWithInherited(
+		c,
+		true,
+		inheritedSpellings{},
+		[]string{c.name},
+	)
+}
+
+type inheritedSpellings struct {
+	longs  map[string]string
+	shorts map[byte]string
+}
+
+func validateCommandWithInherited(
+	command *Command,
+	root bool,
+	inherited inheritedSpellings,
+	commandPath []string,
+) error {
 	if !validID(command.id) {
 		return invalidSpec("invalid command ID %q", command.id)
 	}
 	if !validName(command.name) || reservedLong(command.name) {
 		return invalidSpec("invalid or reserved command name %q", command.name)
+	}
+	if command.deprecation.configured &&
+		!validDeprecationReplacement(command.deprecation.replacement) {
+		return invalidSpec("command %q has an invalid deprecation replacement", command.name)
 	}
 	if !utf8.ValidString(command.about) {
 		return invalidSpec("command %q has an invalid UTF-8 description", command.name)
@@ -430,11 +544,23 @@ func validateCommand(command *Command, root bool) error {
 		if option.long == "" && option.short == 0 {
 			return invalidSpec("option %q has no spelling", option.id)
 		}
+		if option.deprecation.configured &&
+			!validDeprecationReplacement(option.deprecation.replacement) {
+			return invalidSpec("option %q has an invalid deprecation replacement", option.id)
+		}
 		if option.long != "" {
 			if !validName(option.long) || reservedLong(option.long) || has(longs, option.long) {
 				return invalidSpec("duplicate, invalid, or reserved long option %q", option.long)
 			}
 			longs[option.long] = struct{}{}
+			if origin, conflict := inherited.longs[option.long]; conflict {
+				return invalidSpec(
+					"command %q option %q conflicts with inherited option from %q",
+					strings.Join(commandPath, " "),
+					"--"+option.long,
+					origin,
+				)
+			}
 		}
 		if option.short != 0 {
 			if !asciiAlphanumeric(option.short) || reservedShort(option.short) {
@@ -444,11 +570,19 @@ func validateCommand(command *Command, root bool) error {
 				return invalidSpec("duplicate short option %q", option.short)
 			}
 			shorts[option.short] = struct{}{}
+			if origin, conflict := inherited.shorts[option.short]; conflict {
+				return invalidSpec(
+					"command %q option %q conflicts with inherited option from %q",
+					strings.Join(commandPath, " "),
+					fmt.Sprintf("-%c", option.short),
+					origin,
+				)
+			}
 		}
 		if option.parser == nil {
 			return invalidSpec("option %q has no Value Parser", option.id)
 		}
-		if option.kind != OptionValue && (option.repeated || option.environment != "" || option.defaultSet) {
+		if option.kind != OptionValue && (option.repeated || option.sensitive || option.environment != "" || option.defaultSet || option.completion != nil) {
 			return invalidSpec("non-value option %q has value-only configuration", option.id)
 		}
 		for _, relation := range append(append([]optionRelation(nil), option.requires...), option.conflicts...) {
@@ -504,6 +638,21 @@ func validateCommand(command *Command, root bool) error {
 			return invalidSpec("command %q has a nil Invocation validator", command.name)
 		}
 	}
+	visibleInherited := cloneInheritedSpellings(inherited)
+	origin := strings.Join(commandPath, " ")
+	for index := range command.options {
+		option := &command.options[index]
+		if !option.inherited {
+			continue
+		}
+		if option.long != "" {
+			visibleInherited.longs[option.long] = origin
+		}
+		if option.short != 0 {
+			visibleInherited.shorts[option.short] = origin
+		}
+	}
+
 	childSpellings := map[string]struct{}{}
 	childIDs := map[string]struct{}{}
 	for _, child := range command.subcommands {
@@ -518,11 +667,26 @@ func validateCommand(command *Command, root bool) error {
 			}
 			childSpellings[spelling] = struct{}{}
 		}
-		if err := validateCommand(child, false); err != nil {
+		childPath := append(append([]string(nil), commandPath...), child.name)
+		if err := validateCommandWithInherited(child, false, visibleInherited, childPath); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func cloneInheritedSpellings(source inheritedSpellings) inheritedSpellings {
+	cloned := inheritedSpellings{
+		longs:  make(map[string]string, len(source.longs)),
+		shorts: make(map[byte]string, len(source.shorts)),
+	}
+	for spelling, origin := range source.longs {
+		cloned.longs[spelling] = origin
+	}
+	for spelling, origin := range source.shorts {
+		cloned.shorts[spelling] = origin
+	}
+	return cloned
 }
 
 func (c *Command) commandAtPath(path []string) *Command {
@@ -530,6 +694,28 @@ func (c *Command) commandAtPath(path []string) *Command {
 		return nil
 	}
 	command := c
+	for _, name := range path[1:] {
+		var selected *Command
+		for _, candidate := range command.subcommands {
+			if candidate.name == name {
+				selected = candidate
+				break
+			}
+		}
+		if selected == nil {
+			return nil
+		}
+		command = selected
+	}
+	return command
+}
+
+func (c *Command) commandsAtPath(path []string) []*Command {
+	if len(path) == 0 || path[0] != c.name {
+		return nil
+	}
+	command := c
+	commands := []*Command{c}
 	for _, name := range path[1:] {
 		var child *Command
 		for _, candidate := range command.subcommands {
@@ -542,8 +728,9 @@ func (c *Command) commandAtPath(path []string) *Command {
 			return nil
 		}
 		command = child
+		commands = append(commands, command)
 	}
-	return command
+	return commands
 }
 
 func (c *Command) commandIDPathAtPath(path []string) []string {
@@ -641,10 +828,18 @@ func optionDescription(option *OptionSpec) string {
 		description = appendNote(description, "env: "+option.environment)
 	}
 	if option.defaultSet {
-		description = appendNote(description, "default: "+displayValue(option.defaultVal))
+		value := RedactedValue
+		if !option.sensitive {
+			value = displayValue(option.defaultVal)
+		}
+		description = appendNote(description, "default: "+value)
 	}
 	if values := option.parser.PossibleValues(); len(values) > 0 {
-		description = appendNote(description, "possible: "+joinComma(values))
+		possible := RedactedValue
+		if !option.sensitive {
+			possible = joinComma(values)
+		}
+		description = appendNote(description, "possible: "+possible)
 	}
 	return description
 }
